@@ -1,0 +1,23 @@
+project: astro-code
+version: 0.1.0
+
+defaults:
+  default_radius_arcsec: 1.0
+  top_k: 100
+  preview_rows: 100
+  max_result_rows: 10000
+  interaction_primary: web
+  interaction_secondary: cli
+
+paths:
+  default_playbook: playbooks/euclid_desi_mvp.playbook.md
+  runs_dir: runs
+
+mcp:
+  euclid_endpoint: mcp://euclid
+  desi_endpoint: mcp://desi
+  s3_reader_endpoint: mcp://s3-reader
+
+runtime:
+  python_bin: python3
+  strict_playbook_validation: true

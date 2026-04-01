@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile.orchestrator
+    working_dir: /workspace
+    volumes:
+      - ../:/workspace
+    command: ["npm", "run", "run:mvp"]
+    environment:
+      - PYTHON_BIN=python3
+
+  py-worker:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile.worker
+    working_dir: /workspace
+    volumes:
+      - ../:/workspace
+    command: ["python3", "py/workers/extract_radec.py", "--help"]

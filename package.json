@@ -1,0 +1,18 @@
+{
+  "name": "astro-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run": "tsx src/orchestrator/index.ts",
+    "run:mvp": "tsx src/orchestrator/index.ts --request examples/request.radec.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
