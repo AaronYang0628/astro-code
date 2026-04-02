@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "astro-code.fullname" . }}
+  labels:
+    {{- include "astro-code.labels" . | nindent 4 }}
+{{- if .Values.deployment.labels }}
+    {{- toYaml .Values.deployment.labels | nindent 4 }}
+{{- end }}
+{{- if .Values.deployment.annotations }}
+  annotations:
+    {{- toYaml .Values.deployment.annotations | nindent 4 }}
+{{- end }}
+spec:
+  replicas: {{ .Values.autoscaling.minReplicas }}
+  selector:
+    matchLabels:
+      {{- include "astro-code.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "astro-code.selectorLabels" . | nindent 8 }}
+{{- if .Values.pod.labels }}
+        {{- toYaml .Values.pod.labels | nindent 8 }}
+{{- end }}
+{{- if .Values.pod.annotations }}
+      annotations:
+        {{- toYaml .Values.pod.annotations | nindent 8 }}
+{{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "astro-code.fullname" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ .Chart.Name }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        workingDir: /home/opencode/workspace
+        env:
+{{- range .Values.extraEnv }}
+        - name: {{ .name }}
+          value: {{ .value | quote }}
+{{- end }}
+{{- if .Values.probes.liveness.enabled }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.probes.liveness.httpGet.path }}
+            port: http
+          initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          successThreshold: {{ .Values.probes.liveness.successThreshold }}
+          failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+{{- end }}
+{{- if .Values.probes.readiness.enabled }}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.probes.readiness.httpGet.path }}
+            port: http
+          initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+{{- end }}
+{{- if .Values.probes.startup.enabled }}
+        startupProbe:
+          httpGet:
+            path: {{ .Values.probes.startup.httpGet.path }}
+            port: http
+          initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+          periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+          timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          successThreshold: {{ .Values.probes.startup.successThreshold }}
+          failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+{{- end }}
+        volumeMounts:
+{{- if .Values.persistence.config.enabled }}
+        - name: config
+          mountPath: /home/opencode/.config/opencode
+{{- end }}
+{{- if .Values.persistence.data.enabled }}
+        - name: data
+          mountPath: /home/opencode/.local/share/opencode
+{{- end }}
+{{- if .Values.persistence.workspace.enabled }}
+        - name: workspace
+          mountPath: /home/opencode/workspace
+{{- end }}
+{{- if .Values.extraVolumeMounts }}
+{{- toYaml .Values.extraVolumeMounts | nindent 12 }}
+{{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+{{- if .Values.extraContainers }}
+{{- toYaml .Values.extraContainers | nindent 8 }}
+{{- end }}
+      volumes:
+{{- if .Values.persistence.config.enabled }}
+      - name: config
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistence.config.existingClaim | default (printf "%s-config" (include "astro-code.fullname" .)) }}
+{{- end }}
+{{- if .Values.persistence.data.enabled }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistence.data.existingClaim | default (printf "%s-data" (include "astro-code.fullname" .)) }}
+{{- end }}
+{{- if .Values.persistence.workspace.enabled }}
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistence.workspace.existingClaim | default (printf "%s-workspace" (include "astro-code.fullname" .)) }}
+{{- end }}
+{{- if .Values.extraVolumes }}
+{{- toYaml .Values.extraVolumes | nindent 8 }}
+{{- end }}
+{{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+{{- end }}

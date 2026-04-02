@@ -22,6 +22,17 @@ async function main(): Promise<void> {
 
   process.stdout.write(`Run complete: ${result.runId}\n`);
   process.stdout.write(`Output dir: ${result.runDir}\n`);
+  process.stdout.write(`Crossmatch CSV: ${result.artifacts.crossmatchCsv}\n`);
+  process.stdout.write(`Preview CSV: ${result.artifacts.previewCsv}\n`);
+  process.stdout.write(`Filtered CSV: ${result.artifacts.filteredCsv}\n`);
+  process.stdout.write(`Report: ${result.artifacts.reportMd}\n`);
+  process.stdout.write(`Result index: ${result.artifacts.resultIndexJson}\n`);
+  if (result.artifacts.regionAdjustRequestJson) {
+    process.stdout.write(`Region adjust request: ${result.artifacts.regionAdjustRequestJson}\n`);
+  }
+  if (result.artifacts.humanGateRequestJson) {
+    process.stdout.write(`Human filter request: ${result.artifacts.humanGateRequestJson}\n`);
+  }
 }
 
 main().catch((error) => {

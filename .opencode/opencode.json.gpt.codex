@@ -14,12 +14,15 @@
       "timeout": 15000
     }
   },
+  "plugin": [
+    "octto"
+  ],
   "provider": {
     "openai": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "https://v2.qixuw.com/v1",
-        "apiKey": "sk-REDACTED"
+        "apiKey": "sk-ss"
       },
       "models": {
         "gpt-5.3-codex": {

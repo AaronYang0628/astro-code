@@ -1,10 +1,17 @@
-FROM node:20-bookworm
+FROM crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/opencode-docker:v20260316
 
-WORKDIR /workspace
+WORKDIR /home/opencode
 
-COPY package.json package-lock.json tsconfig.json ./
-RUN npm ci
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY . .
+COPY py/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt || true
 
-CMD ["npm", "run", "run:mvp"]
+RUN mkdir -p /home/opencode/workspace/runs
+
+EXPOSE 4000
+
+CMD ["opencode", "serve", "--port", "4000", "--hostname", "0.0.0.0"]

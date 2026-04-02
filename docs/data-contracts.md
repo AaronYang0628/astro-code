@@ -37,3 +37,31 @@
   "class_label": "star"
 }
 ```
+
+## DESI MCP search contract
+
+`astro_k3s_mcp.es_query` with `mode=search` returns a wrapped payload. Use these paths:
+
+- total hits: `response.data.result.hits.total.value`
+- rows: `response.data.result.hits.hits`
+
+Example (zero-hit case):
+
+```json
+{
+  "schemaVersion": "v1",
+  "catalog": "desi-dr10-tractor",
+  "data": {
+    "mode": "search",
+    "result": {
+      "hits": {
+        "total": {
+          "value": 0,
+          "relation": "eq"
+        },
+        "hits": []
+      }
+    }
+  }
+}
+```

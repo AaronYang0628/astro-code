@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: astro-code
+  namespace: argocd
+  labels:
+    app: astro-code
+spec:
+  project: default
+  source:
+    repoURL: oci://harbor.zhejianglab.com/ay-dev/astro-code
+    targetRevision: 0.1.0
+    chart: astro-code
+    helm:
+      valueFiles:
+        - values.yaml
+      parameters:
+        - name: image.repository
+          value: crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/astro-code/opencode
+        - name: image.tag
+          value: latest
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: astro-code
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  ignoreDifferences:
+  - group: apps
+    kind: Deployment
+    jsonPointers:
+      - /spec/replicas
+  - group: ""
+    kind: PersistentVolumeClaim
+    jsonPointers:
+      - /spec/.status

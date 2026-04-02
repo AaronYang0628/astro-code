@@ -13,4 +13,4 @@ Current plugin families:
 
 - MCP catalog query (`mcp-euclid`, `mcp-desi`)
 - MCP S3 reader (`mcp-s3-reader`)
-- Human interaction (`octto-interaction`)
+- Human interaction (`octto`, configured via `plugin` in `.opencode/opencode.json`)

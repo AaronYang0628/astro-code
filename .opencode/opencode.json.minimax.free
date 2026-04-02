@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "euclid-catalog": {
+      "type": "remote",
+      "url": "https://catalog.euclid.mcp.ay.dev:32443/sse",
+      "enabled": true
+    },
+    "astro_k3s_mcp": {
+      "type": "remote",
+      "url": "http://eva24002-entrance.lab.zverse.space:30082/mcp",
+      "enabled": true,
+      "oauth": false,
+      "timeout": 15000
+    }
+  },
+  "plugin": [
+    "octto"
+  ],
+  "model": "opencode/minimax-m2.5-free",
+  "small_model": "opencode/minimax-m2.5-free",
+  "agent": {
+    "build": {
+      "options": {
+        "store": false
+      }
+    },
+    "plan": {
+      "options": {
+        "store": false
+      }
+    }
+  }
+}

@@ -26,6 +26,12 @@ export interface Coord {
   ra_deg: number;
   dec_deg: number;
   source: string;
+  ra_min?: number;
+  ra_max?: number;
+  dec_min?: number;
+  dec_max?: number;
+  s3_path?: string;
+  num_objects?: number;
 }
 
 export interface CatalogRecord {
@@ -50,9 +56,26 @@ export interface CrossmatchRecord {
 
 export interface PlaybookStep {
   id: string;
+  type?: "input" | "route" | "mcp_call" | "transform" | "human_gate" | "export";
   agent: string;
   action: string;
   depends_on?: string[];
+  when?: string;
+  on_fail?: {
+    action: "continue" | "stop";
+    guidance?: string;
+  };
+  mcp?: {
+    server: string;
+    tool: string;
+    input?: Record<string, unknown>;
+  };
+  output_mapping?: Record<string, string>;
+  plugin?: {
+    name: string;
+    tool: string;
+    input?: Record<string, unknown>;
+  };
 }
 
 export interface Playbook {

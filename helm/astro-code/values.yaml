@@ -1,0 +1,158 @@
+# Default values for astro-code Helm chart
+
+image:
+  repository: crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/astro-code/opencode
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+globalLabels: {}
+globalAnnotations: {}
+
+serviceAccount:
+  create: true
+  annotations: {}
+  labels: {}
+  name: ""
+
+deployment:
+  labels: {}
+  annotations: {}
+
+pod:
+  labels: {}
+  annotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+service:
+  type: ClusterIP
+  port: 4000
+  labels: {}
+  annotations: {}
+  selectors: {}
+
+ingress:
+  enabled: true
+  className: "nginx"
+  labels: {}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: astro.code.ay.dev
+      paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: astro-code
+              port:
+                number: 4000
+  tls: []
+  #  - secretName: astro-code-tls
+  #    hosts:
+  #      - astro.code.ay.dev
+
+extraEnv: []
+# Example:
+# extraEnv:
+#   - name: PYTHON_BIN
+#     value: "python3"
+#   - name: OPENCODE_MODEL
+#     value: "opencode/minimax-m2.5-free"
+#   - name: OPENCODE_SERVER_PASSWORD
+#     value: "your-password"
+
+extraVolumes: []
+extraVolumeMounts: []
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteMany
+  size: 1Gi
+  labels: {}
+  annotations: {}
+
+  config:
+    enabled: true
+    existingClaim: ""
+    size: 1Gi
+  data:
+    enabled: true
+    existingClaim: ""
+    size: 1Gi
+  workspace:
+    enabled: true
+    existingClaim: ""
+    size: 5Gi
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 5
+  maxReplicas: 30
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 70
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+probes:
+  liveness:
+    enabled: true
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+  readiness:
+    enabled: true
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 30
+    successThreshold: 1
+    failureThreshold: 3
+
+  startup:
+    enabled: true
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 30

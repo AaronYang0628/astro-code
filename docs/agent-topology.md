@@ -3,10 +3,10 @@
 ## Current agents
 
 - `orchestrator-agent`: input routing, coordination extraction routing, run lifecycle
-- `euclid-agent`: query Euclid MCP and return standardized records
-- `desi-agent`: query DESI MCP and return standardized records
+- `euclid-agent`: parse Euclid source and normalize region window fields
+- `desi-agent`: query `astro_k3s_mcp.es_query` with `mode=search`
 - `crossmatch-agent`: angular distance based matching
-- `filter-agent`: user filter request and validation
+- `filter-agent`: region-adjust and field-filter human gates via octto
 - `reporter-agent`: file export and report output
 
 ## Extension pattern

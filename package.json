@@ -8,6 +8,7 @@
     "run:mvp": "tsx src/orchestrator/index.ts --request examples/request.radec.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {

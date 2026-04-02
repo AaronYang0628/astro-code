@@ -16,6 +16,19 @@ interface RunnerOptions {
   requestPath: string;
 }
 
+interface RunArtifacts {
+  euclidQueryCsv: string;
+  desiQueryCsv: string;
+  crossmatchCsv: string;
+  previewCsv: string;
+  filteredCsv: string;
+  statsJson: string;
+  reportMd: string;
+  resultIndexJson: string;
+  humanGateRequestJson?: string;
+  regionAdjustRequestJson?: string;
+}
+
 function validatePlaybook(playbook: Playbook): void {
   const required = [
     "input-router",
@@ -36,7 +49,7 @@ function validatePlaybook(playbook: Playbook): void {
   }
 }
 
-export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: string; runDir: string }> {
+export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: string; runDir: string; artifacts: RunArtifacts }> {
   const config = loadConfig(options.configPath);
   const request = JSON.parse(fs.readFileSync(path.resolve(options.requestPath), "utf8")) as RunRequest;
   const playbook = loadPlaybook(path.resolve(options.playbookPath));
@@ -56,20 +69,54 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   const coord = await extractCoord(request.input, config.runtime.python_bin);
   const euclidRows = await queryCatalogMcp("euclid", coord, topK);
-  const desiRows = await queryCatalogMcp("desi", coord, topK);
+
+  const retryScale = Number(process.env.DESI_RETRY_SCALE ?? "20");
+  let desiRows = await queryCatalogMcp("desi", coord, topK, { windowScale: 1 });
+  const desiRowsInitial = desiRows.length;
+  let desiRetryApplied = false;
+
+  if (desiRows.length === 0 && Number.isFinite(retryScale) && retryScale > 1) {
+    desiRows = await queryCatalogMcp("desi", coord, topK, { windowScale: retryScale });
+    desiRetryApplied = true;
+  }
+
   const crossmatched = crossmatchCatalogs(euclidRows, desiRows, radiusArcsec);
 
   const crossmatchTruncated = crossmatched.slice(0, maxResultRows);
   const preview = crossmatchTruncated.slice(0, previewRows);
 
-  const humanFilter = resolveHumanFilter(runDir, interaction, request.filter);
-  const filtered = applyFilter(crossmatchTruncated, humanFilter);
+  const humanGate = await resolveHumanFilter(
+    runDir,
+    interaction,
+    {
+      runId,
+      crossmatchRows: crossmatchTruncated.length,
+      desiRows: desiRows.length,
+      retryApplied: desiRetryApplied,
+      retryScale,
+      queryCenter: {
+        ra_deg: coord.ra_deg,
+        dec_deg: coord.dec_deg
+      }
+    },
+    request.filter
+  );
+  const filtered = applyFilter(crossmatchTruncated, humanGate.filter);
 
-  writeCsv(path.join(runDir, "euclid_query.csv"), euclidRows as unknown as Record<string, unknown>[]);
-  writeCsv(path.join(runDir, "desi_query.csv"), desiRows as unknown as Record<string, unknown>[]);
-  writeCsv(path.join(runDir, "crossmatch.csv"), crossmatchTruncated as unknown as Record<string, unknown>[]);
-  writeCsv(path.join(runDir, `preview_${previewRows}.csv`), preview as unknown as Record<string, unknown>[]);
-  writeCsv(path.join(runDir, "filtered.csv"), filtered as unknown as Record<string, unknown>[]);
+  const euclidQueryCsv = path.join(runDir, "euclid_query.csv");
+  const desiQueryCsv = path.join(runDir, "desi_query.csv");
+  const crossmatchCsv = path.join(runDir, "crossmatch.csv");
+  const previewCsv = path.join(runDir, `preview_${previewRows}.csv`);
+  const filteredCsv = path.join(runDir, "filtered.csv");
+  const statsJson = path.join(runDir, "stats.json");
+  const reportMd = path.join(runDir, "report.md");
+  const resultIndexJson = path.join(runDir, "result_index.json");
+
+  writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
+  writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
+  writeCsv(crossmatchCsv, crossmatchTruncated as unknown as Record<string, unknown>[]);
+  writeCsv(previewCsv, preview as unknown as Record<string, unknown>[]);
+  writeCsv(filteredCsv, filtered as unknown as Record<string, unknown>[]);
 
   const stats = {
     run_id: runId,
@@ -80,15 +127,50 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     preview_rows: previewRows,
     euclid_rows: euclidRows.length,
     desi_rows: desiRows.length,
+    desi_rows_initial: desiRowsInitial,
+    desi_retry_applied: desiRetryApplied,
+    desi_retry_scale: desiRetryApplied ? retryScale : null,
     crossmatch_rows_total: crossmatched.length,
     crossmatch_rows_written: crossmatchTruncated.length,
     filtered_rows: filtered.length,
     truncated: crossmatched.length > maxResultRows,
-    filter: humanFilter ?? null
+    human_gate_mode: humanGate.mode,
+    human_gate_request_file: humanGate.requestFile ?? null,
+    filter: humanGate.filter ?? null,
+    artifact_paths: {
+      euclid_query_csv: euclidQueryCsv,
+      desi_query_csv: desiQueryCsv,
+      crossmatch_csv: crossmatchCsv,
+      preview_csv: previewCsv,
+      filtered_csv: filteredCsv,
+      report_md: reportMd
+    }
   };
-  writeJson(path.join(runDir, "stats.json"), stats);
+  writeJson(statsJson, stats);
 
-  writeReport(path.join(runDir, "report.md"), [
+  const artifacts: RunArtifacts = {
+    euclidQueryCsv,
+    desiQueryCsv,
+    crossmatchCsv,
+    previewCsv,
+    filteredCsv,
+    statsJson,
+    reportMd,
+    resultIndexJson,
+    humanGateRequestJson: humanGate.mode === "filter" ? humanGate.requestFile : undefined,
+    regionAdjustRequestJson: humanGate.mode === "region_adjust" ? humanGate.requestFile : undefined
+  };
+
+  writeJson(resultIndexJson, {
+    run_id: runId,
+    output_dir: runDir,
+    crossmatch_rows: crossmatchTruncated.length,
+    desi_rows: desiRows.length,
+    zero_result: crossmatchTruncated.length === 0,
+    artifacts
+  });
+
+  writeReport(reportMd, [
     "# Run Report",
     "",
     `- run_id: ${runId}`,
@@ -99,12 +181,22 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- radius_arcsec: ${radiusArcsec}`,
     `- euclid_rows: ${euclidRows.length}`,
     `- desi_rows: ${desiRows.length}`,
+    `- desi_rows_initial: ${desiRowsInitial}`,
+    `- desi_retry_applied: ${desiRetryApplied ? "yes" : "no"}`,
+    `- desi_retry_scale: ${desiRetryApplied ? retryScale : "n/a"}`,
     `- crossmatch_rows_total: ${crossmatched.length}`,
     `- crossmatch_rows_written: ${crossmatchTruncated.length}`,
     `- preview_file: preview_${previewRows}.csv`,
     `- filtered_rows: ${filtered.length}`,
-    `- filter_applied: ${humanFilter ? "yes" : "no"}`
+    `- filter_applied: ${humanGate.filter ? "yes" : "no"}`,
+    `- human_gate_mode: ${humanGate.mode}`,
+    `- crossmatch_csv: ${crossmatchCsv}`,
+    `- preview_csv: ${previewCsv}`,
+    `- filtered_csv: ${filteredCsv}`,
+    `- result_index_json: ${resultIndexJson}`,
+    `- region_adjust_request: ${artifacts.regionAdjustRequestJson ?? "n/a"}`,
+    `- human_filter_request: ${artifacts.humanGateRequestJson ?? "n/a"}`
   ]);
 
-  return { runId, runDir };
+  return { runId, runDir, artifacts };
 }

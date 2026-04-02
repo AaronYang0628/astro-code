@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "astro-code.fullname" . }}
+  labels:
+    {{- include "astro-code.labels" . | nindent 4 }}
+{{- if .Values.service.labels }}
+    {{- toYaml .Values.service.labels | nindent 4 }}
+{{- end }}
+{{- if .Values.service.annotations }}
+  annotations:
+    {{- toYaml .Values.service.annotations | nindent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "astro-code.selectorLabels" . | nindent 4 }}

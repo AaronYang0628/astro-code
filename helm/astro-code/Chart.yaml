@@ -1,0 +1,19 @@
+apiVersion: v2
+name: astro-code
+description: Astro-code AI coding assistant for astronomical crossmatch (Euclid x DESI)
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - astro-code
+  - astronomy
+  - euclid
+  - desi
+  - crossmatch
+  - ai
+home: https://github.com/your-org/astro-code
+sources:
+  - https://github.com/your-org/astro-code
+maintainers:
+  - name: astro-code-team
+    url: https://github.com/your-org
