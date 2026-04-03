@@ -58,3 +58,14 @@ Service account name
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+OpenCode config secret name
+*/}}
+{{- define "astro-code.opencodeConfigSecretName" -}}
+{{- if .Values.opencodeConfig.secret.name }}
+{{- .Values.opencodeConfig.secret.name }}
+{{- else }}
+{{- printf "%s-opencode-config" (include "astro-code.fullname" .) }}
+{{- end }}
+{{- end }}

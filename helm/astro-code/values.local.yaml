@@ -1,7 +1,10 @@
 image:
-  repository: astro-code/opencode
-  tag: dev
-  pullPolicy: Never
+  repository: crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: crpi-regcred
 
 replicaCount: 1
 
@@ -10,6 +13,11 @@ ingress:
 
 autoscaling:
   enabled: false
+
+hostAliases:
+  - ip: "192.168.31.111"
+    hostnames:
+      - "catalog.euclid.mcp.ay.dev"
 
 persistence:
   enabled: true
@@ -27,6 +35,13 @@ persistence:
 
 opencode:
   serverPassword: ""
+
+opencodeConfig:
+  secret:
+    enabled: false
+    create: false
+    name: ""
+    opencodeJson: ""
 
 extraEnv:
   - name: MCP_INSECURE_TLS

@@ -78,6 +78,8 @@ Detailed guides:
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
 - Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
+- Helm supports `hostAliases` for fake/local MCP domains (for example `catalog.euclid.mcp.ay.dev`).
+- OpenCode config mount supports two modes: seeded PVC (default) or Secret-mounted `opencode.json`.
 
 ## OpenCode testing
 

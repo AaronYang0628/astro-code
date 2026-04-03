@@ -28,6 +28,13 @@ pod:
   labels: {}
   annotations: {}
 
+hostAliases: []
+# Example:
+# hostAliases:
+#   - ip: "192.168.31.111"
+#     hostnames:
+#       - "catalog.euclid.mcp.ay.dev"
+
 podSecurityContext:
   fsGroup: 1000
   runAsNonRoot: true
@@ -122,13 +129,19 @@ autoscaling:
 initSeed:
   enabled: true
 
+opencodeConfig:
+  secret:
+    enabled: false
+    create: false
+    name: ""
+    opencodeJson: ""
+
 runtime:
   pythonBin: "python3"
 
 configEnv: {}
 
 opencode:
-  # If set, HTTP probes may return 401 unless you also customize probe auth.
   serverPassword: ""
 
 nodeSelector: {}

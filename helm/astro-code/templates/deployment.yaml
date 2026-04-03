@@ -35,6 +35,10 @@ spec:
       serviceAccountName: {{ include "astro-code.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+{{- if .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml .Values.hostAliases | nindent 8 }}
+{{- end }}
 {{- if and .Values.initSeed.enabled .Values.persistence.enabled }}
       initContainers:
       - name: init-seed
@@ -45,10 +49,8 @@ spec:
           - |
             set -e
 {{- if .Values.persistence.config.enabled }}
-            if [ -z "$(ls -A /mnt/config 2>/dev/null)" ]; then
-              mkdir -p /mnt/config
-              cp -a /opt/astro-code-seed/config/. /mnt/config/
-            fi
+            mkdir -p /mnt/config
+            cp -f /opt/astro-code-seed/config/opencode.json /mnt/config/opencode.json
 {{- end }}
 {{- if .Values.persistence.workspace.enabled }}
             if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
@@ -131,6 +133,18 @@ spec:
         - name: config
           mountPath: /home/opencode/.config/opencode
 {{- end }}
+{{- if .Values.opencodeConfig.secret.enabled }}
+{{- if .Values.persistence.config.enabled }}
+        - name: opencode-config-secret
+          mountPath: /home/opencode/.config/opencode/opencode.json
+          subPath: opencode.json
+          readOnly: true
+{{- else }}
+        - name: opencode-config-secret
+          mountPath: /home/opencode/.config/opencode
+          readOnly: true
+{{- end }}
+{{- end }}
 {{- if .Values.persistence.data.enabled }}
         - name: data
           mountPath: /home/opencode/.local/share/opencode
@@ -162,6 +176,11 @@ spec:
       - name: workspace
         persistentVolumeClaim:
           claimName: {{ .Values.persistence.workspace.existingClaim | default (printf "%s-workspace" (include "astro-code.fullname" .)) }}
+{{- end }}
+{{- if .Values.opencodeConfig.secret.enabled }}
+      - name: opencode-config-secret
+        secret:
+          secretName: {{ include "astro-code.opencodeConfigSecretName" . }}
 {{- end }}
 {{- if .Values.extraVolumes }}
 {{- toYaml .Values.extraVolumes | nindent 8 }}

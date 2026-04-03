@@ -9,6 +9,7 @@ runs/
 __pycache__/
 *.pyc
 .DS_Store
+.github
 
 # Local secrets and local-only config
 .env

@@ -40,15 +40,8 @@ If `k3s ctr images import` asks for sudo password, run it manually in your own t
 
 ```bash
 TAG=v$(date +%Y%m%d-%H%M%S)
-podman tag localhost/astro-code/opencode:dev crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/astro-code/opencode:${TAG}
-podman push crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/astro-code/opencode:${TAG}
-```
-
-If `astro-code/opencode` push fails with `insufficient_scope`, use namespace fallback:
-
-```bash
-podman tag localhost/astro-code/opencode:dev crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/opencode-docker:${TAG}
-podman push crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/opencode-docker:${TAG}
+podman tag localhost/astro-code/opencode:dev crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code:${TAG}
+podman push crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code:${TAG}
 ```
 
 Create pull secret from current podman login:
@@ -81,6 +74,35 @@ kubectl -n astro-code logs deploy/astro-code --tail=100
 kubectl -n astro-code port-forward svc/astro-code 4000:4000
 ```
 
+### Host aliases for local MCP domains
+
+`values.local.yaml` includes:
+
+```yaml
+hostAliases:
+  - ip: "192.168.31.111"
+    hostnames:
+      - "catalog.euclid.mcp.ay.dev"
+```
+
+Adjust the IP to your local k8s node/service ingress IP when needed.
+
+### OpenCode config mount mode
+
+Default mode:
+
+- config PVC mounted at `/home/opencode/.config/opencode`
+- init container seeds `opencode.json` from `ops/opencode.seed.json` on first run
+
+Optional secret mode:
+
+- set `opencodeConfig.secret.enabled=true`
+- either:
+  - set `opencodeConfig.secret.create=true` and provide `opencodeConfig.secret.opencodeJson`
+  - or set `opencodeConfig.secret.name=<existing-secret>`
+
+When secret mode is enabled, `opencode.json` is mounted read-only from Secret.
+
 Deploy with pushed image + pull secret:
 
 ```bash
@@ -88,7 +110,7 @@ helm upgrade --install astro-code helm/astro-code \
   -n astro-code \
   --create-namespace \
   -f helm/astro-code/values.local.yaml \
-  --set image.repository=crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/opencode-docker \
+  --set image.repository=crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code \
   --set image.tag=${TAG} \
   --set image.pullPolicy=IfNotPresent \
   --set imagePullSecrets[0].name=crpi-regcred \
