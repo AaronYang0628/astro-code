@@ -1,0 +1,10 @@
+{
+  "input": {
+    "type": "radec_text",
+    "value": "51.12015772112324,-26.971838908444358"
+  },
+  "radiusArcsec": 250.0,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web"
+}

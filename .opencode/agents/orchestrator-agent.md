@@ -7,9 +7,14 @@
 - Local `npm run` is allowed only for explicit regression/backfill checks requested by user.
 - Avoid broad repository discovery before execution; start from known flow and execute MCP steps directly.
 - In octto flow, wait for user answer in the same session, then continue execution with selected parameters.
+- Octto interaction must use full lifecycle: `start_session` -> blocking answer wait -> `end_session` -> continue.
+- After producing result paths, read `preview_summary.json` and show preview summary (`preview rows`, `available filter fields`, and a few sample rows) without asking user to open files manually.
+- Show preview sample as markdown table (top 10 rows) before any filtering interaction.
+- If crossmatch rows are greater than 0, first ask user via OpenCode native confirm popup whether to enter filtering; only after user confirms, hand off to `filter-agent` octto flow.
 - Must always print explicit artifact paths from run output:
   - `crossmatch.csv`
   - `preview_100.csv`
+  - `preview_summary.json`
   - `filtered.csv`
   - `result_index.json`
 - If crossmatch rows are zero, must point to `region_adjust_request.json` and trigger user follow-up via octto plugin flow.

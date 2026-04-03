@@ -47,50 +47,20 @@ npm run run:mvp
 - `report.md`
 - `result_index.json`
 - `region_adjust_request.json` (only when no crossmatch results)
+- `preview_summary.json` (preview count + sample rows + filterable fields)
 
 ## Testing
 
-### Execution policy
+Execution policy:
 
 - Primary flow: OpenCode Web/TUI session execution (direct MCP + octto in same chat session)
-- Local pipeline (`npm run ...`): regression/local replay only, do not mix with active octto interaction in Web session
+- Local `npm run` flow: regression/local replay only
+- Do not mix Web HITL and local npm flow in one task
 
-### Quick Test (with sample data)
+Detailed guides:
 
-```bash
-npm run run:mvp
-```
-
-This runs with the built-in sample request using coordinates `150.114000, -2.345000`.
-
-### Custom Test
-
-Create a custom request JSON file, then run:
-
-```bash
-npx tsx src/orchestrator/index.ts \
-  --request <your_request.json> \
-  --playbook playbooks/euclid_desi_mvp.playbook.md \
-  --config pipeline.config.yaml
-```
-
-### Supported Input Types
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `radec_text` | Direct RA,DEC coordinates | `{"input":{"type":"radec_text","value":"150.114,-2.345"}}` |
-| `file_upload` | CSV/FITS file upload | See `examples/request.file.json` |
-| `s3_uri` | S3 path | See `examples/request.s3.json` |
-
-### Output Location
-
-Results are written to `runs/<run_id>/`:
-- `crossmatch.csv`
-- `preview_100.csv`
-- `filtered.csv`
-- `stats.json`
-- `report.md`
-- `result_index.json`
+- Web prompts and session testing: `docs/opencode-web-testing.md`
+- Local npm replay/regression: `docs/local-npm-regression.md`
 
 ## Notes
 
@@ -102,6 +72,10 @@ Results are written to `runs/<run_id>/`:
 - Octto is enabled as OpenCode plugin via `"plugin": ["octto"]` in `.opencode/opencode.json`.
 - If Euclid MCP uses self-signed TLS cert, set `MCP_INSECURE_TLS=1` for `npm run` pipeline (or set a trusted CA).
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).
+- When crossmatch has rows, field/value filtering is expected to be collected via octto interaction.
+- Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
+- Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
+- Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
 
 ## OpenCode testing
 
@@ -117,10 +91,6 @@ NODE_TLS_REJECT_UNAUTHORIZED=0 opencode web --port 7788
 - Project config is loaded from `.opencode/opencode.json`.
 - In `opencode debug config`, confirm `plugin` contains `octto`.
 - If Euclid MCP uses self-signed TLS cert, use `NODE_TLS_REJECT_UNAUTHORIZED=0` for local debugging.
-
-Detailed Web test workflow (agent-by-agent):
-
-- `docs/opencode-web-testing.md`
 
 Non-interactive sanity check:
 

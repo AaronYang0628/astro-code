@@ -87,7 +87,75 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
 
 async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecord[]> {
   if (!coord.s3_path) {
-    return buildFallbackEuclidFromCoord(coord);
+    const euclidWindowArcsec = Number(process.env.EUCLID_WINDOW_ARCSEC ?? "600");
+    const euclidWindowDeg = Number.isFinite(euclidWindowArcsec) ? euclidWindowArcsec / 3600 : 600 / 3600;
+    const raMin = coord.ra_deg - euclidWindowDeg;
+    const raMax = coord.ra_deg + euclidWindowDeg;
+    const decMin = coord.dec_deg - euclidWindowDeg;
+    const decMax = coord.dec_deg + euclidWindowDeg;
+
+    const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog: "euclid-q1-mer-final",
+      mode: "search",
+      body: {
+        query: {
+          bool: {
+            filter: [
+              { range: { RIGHT_ASCENSION: { gte: raMin, lte: raMax } } },
+              { range: { DECLINATION: { gte: decMin, lte: decMax } } }
+            ]
+          }
+        },
+        from: 0,
+        size: topK
+      }
+    }) as Record<string, unknown>;
+
+    const hits = (((payload.data as Record<string, unknown> | undefined)?.result as Record<string, unknown> | undefined)?.hits as Record<string, unknown> | undefined)?.hits;
+    const hitRows = Array.isArray(hits) ? hits : [];
+    const rows: CatalogRecord[] = [];
+
+    for (const hit of hitRows) {
+      if (typeof hit !== "object" || hit === null) {
+        continue;
+      }
+
+      const hitObj = hit as Record<string, unknown>;
+      const source = (hitObj._source as Record<string, unknown> | undefined) ?? hitObj;
+      const { ra, dec } = pickCoord(source);
+      if (ra === null || dec === null) {
+        continue;
+      }
+
+      rows.push({
+        catalog: "euclid",
+        object_id: String(
+          source.OBJECT_ID
+          ?? source.object_id
+          ?? hitObj._id
+          ?? `EUCLID_${rows.length + 1}`
+        ),
+        ra_deg: ra,
+        dec_deg: dec,
+        mag: firstFinite([
+          source.MAG_VIS,
+          source.mag_vis,
+          source.MAG_AUTO,
+          source.mag_auto,
+          source.mag,
+          source.MAG
+        ]),
+        class_label: String(
+          source.EXTENDED_FLAG
+          ?? source.extended_flag
+          ?? source.type
+          ?? source.TYPE
+          ?? "unknown"
+        )
+      });
+    }
+
+    return rows.length > 0 ? rows : buildFallbackEuclidFromCoord(coord);
   }
 
   const payload = await callMcpTool(EUCLID_SERVER, "get_catalog_objects", {

@@ -13,13 +13,20 @@ export interface FilterCondition {
   value: string | number;
 }
 
+export type FilterLogic = "and" | "or";
+
+export interface FilterSpec {
+  logic: FilterLogic;
+  conditions: FilterCondition[];
+}
+
 export interface RunRequest {
   input: InputSpec;
   radiusArcsec?: number;
   topK?: number;
   previewRows?: number;
   interaction?: InteractionMode;
-  filter?: FilterCondition;
+  filter?: FilterCondition | FilterSpec;
 }
 
 export interface Coord {
