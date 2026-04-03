@@ -88,7 +88,8 @@ npx tsx src/orchestrator/index.ts \
 
 - 上传解析设计为临时文件；Web 层应在提取后删除上传文件。
 - `s3://` 输入委托给 MCP 进行权限和检索处理。
-- 在使用 OpenCode 提供商调用之前，请将 `.opencode/opencode.json` 中的 `apiKey` 替换为您的本地凭证。
+- OpenCode 提供商 `apiKey` 通过环境变量 `OPENAI_API_KEY` 注入（`.opencode/opencode.json` 中使用 `{env:OPENAI_API_KEY}`）。
+- 建议把本地密钥放在 shell 环境变量或 `.envrc`（direnv）中，不要把密钥提交到 git。
 - Octto 通过 `.opencode/opencode.json` 中的 `"plugin": ["octto"]` 启用。
 
 ## OpenCode 测试

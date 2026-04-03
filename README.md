@@ -61,6 +61,7 @@ Detailed guides:
 
 - Web prompts and session testing: `docs/opencode-web-testing.md`
 - Local npm replay/regression: `docs/local-npm-regression.md`
+- Local image/chart build + k3s deployment: `ops/playbooks-runbook.md`
 
 ## Notes
 
@@ -68,7 +69,8 @@ Detailed guides:
 - `s3://` inputs are delegated to MCP for permission and retrieval handling.
 - `npm run` pipeline now uses real MCP servers via `src/orchestrator/mcp-client.ts`.
 - OpenCode path uses MCP servers from `.opencode/opencode.json`.
-- Replace `apiKey` in `.opencode/opencode.json` with your local credential before using OpenCode provider calls.
+- OpenCode provider `apiKey` is loaded from environment variable: `OPENAI_API_KEY` (configured as `{env:OPENAI_API_KEY}` in `.opencode/opencode.json`).
+- Put your local key in shell env or `.envrc` (direnv), and never commit keys into git.
 - Octto is enabled as OpenCode plugin via `"plugin": ["octto"]` in `.opencode/opencode.json`.
 - If Euclid MCP uses self-signed TLS cert, set `MCP_INSECURE_TLS=1` for `npm run` pipeline (or set a trusted CA).
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).

@@ -1,16 +1,19 @@
 node_modules/
 dist/
-.venv/
+runs/
+.git/
+.vscode/
+.idea/
+*.log
+*.tgz
 __pycache__/
 *.pyc
-runs/
 .DS_Store
-.vscode/
 
-# Local secrets
+# Local secrets and local-only config
 .env
 .env.*
-!.env.example
 .envrc
 .secrets/
 .opencode/opencode.local.json
+.opencode/opencode.json

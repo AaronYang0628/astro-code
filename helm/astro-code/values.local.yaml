@@ -1,0 +1,33 @@
+image:
+  repository: astro-code/opencode
+  tag: dev
+  pullPolicy: Never
+
+replicaCount: 1
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+persistence:
+  enabled: true
+  storageClass: local-path
+  accessMode: ReadWriteOnce
+  config:
+    enabled: true
+    size: 1Gi
+  data:
+    enabled: true
+    size: 1Gi
+  workspace:
+    enabled: true
+    size: 5Gi
+
+opencode:
+  serverPassword: ""
+
+extraEnv:
+  - name: MCP_INSECURE_TLS
+    value: "1"

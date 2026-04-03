@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Astro-Code Docker Image
 
 on:
   push:
@@ -9,12 +9,12 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    # Run every day at 9:00 UTC to check for new OpenCode versions
+    # Run every day at 9:00 UTC to check project version changes
     - cron: '0 9 * * *'
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: fluxbase-eu/opencode-docker
+  IMAGE_NAME: AaronYang0628/astro-code
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   check-version:
-    name: Check for new OpenCode version
+    name: Check for new astro-code version
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.set_outputs.outputs.new_version }}
@@ -41,15 +41,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch latest OpenCode version
+      - name: Read project version from package.json
         id: fetch_version
         # Always fetch on schedule/workflow_dispatch, or on push to main
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: |
-          # Get the latest release from OpenCode's GitHub repo
-          LATEST_VERSION=$(gh release view --repo anomalyco/opencode --json tagName --jq '.tagName' | sed 's/^v//')
+          # Use the local project version as release target version
+          LATEST_VERSION=$(node -e "const fs=require('node:fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); console.log(pkg.version)")
           echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-          echo "Latest version: $LATEST_VERSION"
+          echo "Project version: $LATEST_VERSION"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -60,7 +60,7 @@ jobs:
           LATEST="${{ steps.fetch_version.outputs.latest_version }}"
           CURRENT="${{ steps.current_version.outputs.current_version }}"
 
-          echo "Latest OpenCode version: $LATEST"
+          echo "Project version: $LATEST"
           echo "Current Docker version: $CURRENT"
 
           if [ "$CURRENT" = "none" ] || [ "$LATEST" != "$CURRENT" ]; then
@@ -109,7 +109,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine OpenCode version
+      - name: Determine image tag version
         id: version
         run: |
           if [ "${{ needs.check-version.outputs.should_release }}" = "true" ]; then
@@ -132,8 +132,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != 'latest' }}
             type=raw,value=latest
           labels: |
-            org.opencontainers.image.title=OpenCode Docker
-            org.opencontainers.image.description=Docker image for OpenCode AI coding assistant
+            org.opencontainers.image.title=astro-code Docker
+            org.opencontainers.image.description=Docker image for astro-code workflow project
             org.opencontainers.image.vendor=fluxbase-eu
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
@@ -141,11 +141,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ops/Dockerfile.orchestrator
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            OPENCODE_VERSION=${{ steps.version.outputs.version }}
+            ASTRO_CODE_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -169,44 +170,32 @@ jobs:
           IFS='.' read -ra VERSION_PARTS <<< "$VERSION"
           echo "major_minor=${VERSION_PARTS[0]}.${VERSION_PARTS[1]}" >> $GITHUB_OUTPUT
 
-      - name: Fetch OpenCode release notes
-        id: release_notes
-        run: |
-          RELEASE_BODY=$(gh release view v${{ steps.version.outputs.version }} --repo anomalyco/opencode --json body --jq '.body')
-          # Add to output (truncate if too long for GitHub Actions)
-          EOF=$(dd if=/dev/urandom bs=1 count=32 2>/dev/null | base64)
-          echo "release_notes<<$EOF" >> $GITHUB_OUTPUT
-          echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
-          echo "$EOF" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: OpenCode Docker ${{ steps.version.outputs.version }}
+          name: astro-code Docker ${{ steps.version.outputs.version }}
           body: |
-            ## OpenCode Docker Image ${{ steps.version.outputs.version }}
+            ## astro-code Docker Image ${{ steps.version.outputs.version }}
 
-            This release tracks [OpenCode v${{ steps.version.outputs.version }}](https://github.com/anomalyco/opencode/releases/tag/v${{ steps.version.outputs.version }}).
+            This release publishes the Docker image for this repository.
 
             ### Docker Image
 
             Pull this version:
             ```bash
-            docker pull ghcr.io/fluxbase-eu/opencode-docker:${{ steps.version.outputs.version }}
+            docker pull ghcr.io/AaronYang0628/astro-code:${{ steps.version.outputs.version }}
             ```
 
             Or use latest:
             ```bash
-            docker pull ghcr.io/fluxbase-eu/opencode-docker:latest
+            docker pull ghcr.io/AaronYang0628/astro-code:latest
             ```
 
             ### Quick Start
 
             ```bash
-            docker run -p 4000:4000 ghcr.io/fluxbase-eu/opencode-docker:${{ steps.version.outputs.version }}
+            docker run -p 4000:4000 ghcr.io/AaronYang0628/astro-code:${{ steps.version.outputs.version }}
             ```
 
             ### Available Tags
@@ -217,10 +206,11 @@ jobs:
 
             ---
 
-            ### OpenCode Release Notes
+            ### Notes
 
-            ${{ steps.release_notes.outputs.release_notes }}
+            - Source repository: https://github.com/${{ github.repository }}
           draft: false
           prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

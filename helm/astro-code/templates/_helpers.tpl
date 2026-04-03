@@ -47,3 +47,14 @@ Selector labels
 app.kubernetes.io/name: {{ include "astro-code.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Service account name
+*/}}
+{{- define "astro-code.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "astro-code.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}

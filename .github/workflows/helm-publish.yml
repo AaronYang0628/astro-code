@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'helm/opencode/**'
+      - 'helm/astro-code/**'
   workflow_dispatch:
     inputs:
       version_bump:
@@ -48,7 +48,7 @@ jobs:
       - name: Get current chart version
         id: current_version
         run: |
-          CURRENT_VERSION=$(grep '^version:' helm/opencode/Chart.yaml | awk '{print $2}')
+          CURRENT_VERSION=$(grep '^version:' helm/astro-code/Chart.yaml | awk '{print $2}')
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "Current chart version: $CURRENT_VERSION"
 
@@ -56,7 +56,7 @@ jobs:
         id: check_changes
         run: |
           # Check if chart exists in GHCR
-          CHART_EXISTS=$(helm search repo ${{ env.REGISTRY }}/${{ github.REPO_OWNER_LOWER }}/opencode --versions | grep -c ${{ steps.current_version.outputs.current_version }} || echo "0")
+          CHART_EXISTS=$(helm search repo ${{ env.REGISTRY }}/${{ github.REPO_OWNER_LOWER }}/astro-code --versions | grep -c ${{ steps.current_version.outputs.current_version }} || echo "0")
 
           if [ "$CHART_EXISTS" -eq 0 ]; then
             echo "First release or new version, will publish"
@@ -75,8 +75,8 @@ jobs:
 
           echo "Last helm commit: $LAST_CHART_COMMIT"
 
-          # Get list of files in helm/opencode excluding Chart.yaml (which we update)
-          CHART_FILES=$(find helm/opencode -type f ! -name "Chart.yaml" ! -path "*/.*")
+          # Get list of files in helm/astro-code excluding Chart.yaml (which we update)
+          CHART_FILES=$(find helm/astro-code -type f ! -name "Chart.yaml" ! -path "*/.*")
 
           # Check if any chart files have changed since last release
           CHANGES_DETECTED=false
@@ -88,7 +88,7 @@ jobs:
           done
 
           # Also check for new files
-          if git diff --name-only "$LAST_CHART_COMMIT" HEAD -- helm/opencode/ | grep -qv Chart.yaml; then
+          if git diff --name-only "$LAST_CHART_COMMIT" HEAD -- helm/astro-code/ | grep -qv Chart.yaml; then
             CHANGES_DETECTED=true
           fi
 
@@ -111,7 +111,7 @@ jobs:
             BUMP_TYPE="patch"
 
             # Get commits since last tag that touched helm/
-            COMMITS=$(git log --oneline --grep="helm" --grep="chart" --grep="k8s" --grep="kubernetes" -i -- helm/opencode/ | head -20)
+            COMMITS=$(git log --oneline --grep="helm" --grep="chart" --grep="k8s" --grep="kubernetes" -i -- helm/astro-code/ | head -20)
 
             if echo "$COMMITS" | grep -iE "feat|feature|add|new"; then
               BUMP_TYPE="minor"
@@ -160,13 +160,13 @@ jobs:
         if: steps.check_changes.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
-          sed -i "s/^version:.*/version: $NEW_VERSION/" helm/opencode/Chart.yaml
+          sed -i "s/^version:.*/version: $NEW_VERSION/" helm/astro-code/Chart.yaml
           echo "Updated Chart.yaml to version $NEW_VERSION"
 
       - name: Commit version bump
         if: steps.check_changes.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch'
         run: |
-          git add helm/opencode/Chart.yaml
+          git add helm/astro-code/Chart.yaml
           git commit -m "chore(helm): Bump chart version to ${{ steps.new_version.outputs.new_version }}"
 
       - name: Push version bump
@@ -192,10 +192,10 @@ jobs:
           CHART_PATH="oci://${{ env.REGISTRY }}/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
 
           # Package and push the chart
-          cd helm/opencode
+          cd helm/astro-code
           helm package .
 
           # Push to GHCR (Helm automatically appends chart name from Chart.yaml)
-          helm push opencode-*.tgz "$CHART_PATH"
+          helm push astro-code-*.tgz "$CHART_PATH"
 
-          echo "Published Helm chart $VERSION to $CHART_PATH/opencode"
+          echo "Published Helm chart $VERSION to $CHART_PATH/astro-code"

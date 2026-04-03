@@ -5,8 +5,8 @@ metadata:
   labels:
     {{- include "astro-code.labels" . | nindent 4 }}
 data:
-  PORT: "4000"
-  PYTHON_BIN: "python3"
-{{- range $key, $value := .Values.extraEnv }}
+  PORT: {{ .Values.service.port | quote }}
+  PYTHON_BIN: {{ .Values.runtime.pythonBin | quote }}
+{{- range $key, $value := .Values.configEnv }}
   {{ $key }}: {{ $value | quote }}
 {{- end }}

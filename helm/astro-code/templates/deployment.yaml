@@ -12,7 +12,7 @@ metadata:
     {{- toYaml .Values.deployment.annotations | nindent 4 }}
 {{- end }}
 spec:
-  replicas: {{ .Values.autoscaling.minReplicas }}
+  replicas: {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}{{ else }}{{ .Values.replicaCount }}{{ end }}
   selector:
     matchLabels:
       {{- include "astro-code.selectorLabels" . | nindent 6 }}
@@ -32,9 +32,42 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "astro-code.fullname" . }}
+      serviceAccountName: {{ include "astro-code.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+{{- if and .Values.initSeed.enabled .Values.persistence.enabled }}
+      initContainers:
+      - name: init-seed
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+{{- if .Values.persistence.config.enabled }}
+            if [ -z "$(ls -A /mnt/config 2>/dev/null)" ]; then
+              mkdir -p /mnt/config
+              cp -a /opt/astro-code-seed/config/. /mnt/config/
+            fi
+{{- end }}
+{{- if .Values.persistence.workspace.enabled }}
+            if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
+              mkdir -p /mnt/workspace
+              cp -a /opt/astro-code-seed/workspace/. /mnt/workspace/
+            fi
+{{- end }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        volumeMounts:
+{{- if .Values.persistence.config.enabled }}
+        - name: config
+          mountPath: /mnt/config
+{{- end }}
+{{- if .Values.persistence.workspace.enabled }}
+        - name: workspace
+          mountPath: /mnt/workspace
+{{- end }}
+{{- end }}
       containers:
       - name: {{ .Chart.Name }}
         securityContext:
@@ -46,15 +79,26 @@ spec:
           containerPort: {{ .Values.service.port }}
           protocol: TCP
         workingDir: /home/opencode/workspace
+        envFrom:
+        - configMapRef:
+            name: {{ include "astro-code.fullname" . }}-config
+{{- if or .Values.extraEnv .Values.opencode.serverPassword }}
         env:
+{{- if .Values.opencode.serverPassword }}
+        - name: OPENCODE_SERVER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "astro-code.fullname" . }}-secret
+              key: OPENCODE_SERVER_PASSWORD
+{{- end }}
 {{- range .Values.extraEnv }}
         - name: {{ .name }}
           value: {{ .value | quote }}
 {{- end }}
+{{- end }}
 {{- if .Values.probes.liveness.enabled }}
         livenessProbe:
-          httpGet:
-            path: {{ .Values.probes.liveness.httpGet.path }}
+          tcpSocket:
             port: http
           initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
           periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
@@ -64,8 +108,7 @@ spec:
 {{- end }}
 {{- if .Values.probes.readiness.enabled }}
         readinessProbe:
-          httpGet:
-            path: {{ .Values.probes.readiness.httpGet.path }}
+          tcpSocket:
             port: http
           initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
           periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
@@ -75,8 +118,7 @@ spec:
 {{- end }}
 {{- if .Values.probes.startup.enabled }}
         startupProbe:
-          httpGet:
-            path: {{ .Values.probes.startup.httpGet.path }}
+          tcpSocket:
             port: http
           initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
           periodSeconds: {{ .Values.probes.startup.periodSeconds }}

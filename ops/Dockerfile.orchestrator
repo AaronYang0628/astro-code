@@ -8,10 +8,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY py/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt || true
+RUN pip install --break-system-packages --no-cache-dir -r /tmp/requirements.txt
 
-RUN mkdir -p /home/opencode/workspace/runs
+COPY . /opt/astro-code-seed/workspace
+
+RUN mkdir -p /opt/astro-code-seed/config \
+    && cp /opt/astro-code-seed/workspace/ops/opencode.seed.json /opt/astro-code-seed/config/opencode.json \
+    && mkdir -p /home/opencode/workspace/runs
+
+WORKDIR /home/opencode/workspace
 
 EXPOSE 4000
 
-CMD ["opencode", "serve", "--port", "4000", "--hostname", "0.0.0.0"]
+ENTRYPOINT ["opencode", "serve"]
+CMD ["--port", "4000", "--hostname", "0.0.0.0"]

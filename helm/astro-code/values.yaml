@@ -1,9 +1,11 @@
 # Default values for astro-code Helm chart
 
 image:
-  repository: crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/astro-code/opencode
+  repository: astro-code/opencode
   pullPolicy: IfNotPresent
-  tag: "latest"
+  tag: "dev"
+
+replicaCount: 1
 
 imagePullSecrets: []
 nameOverride: ""
@@ -46,7 +48,7 @@ service:
   selectors: {}
 
 ingress:
-  enabled: true
+  enabled: false
   className: "nginx"
   labels: {}
   annotations:
@@ -84,7 +86,7 @@ extraVolumeMounts: []
 persistence:
   enabled: true
   storageClass: ""
-  accessMode: ReadWriteMany
+  accessMode: ReadWriteOnce
   size: 1Gi
   labels: {}
   annotations: {}
@@ -111,11 +113,23 @@ resources:
     memory: 1Gi
 
 autoscaling:
-  enabled: true
-  minReplicas: 5
-  maxReplicas: 30
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
   targetCPUUtilizationPercentage: 60
   targetMemoryUtilizationPercentage: 70
+
+initSeed:
+  enabled: true
+
+runtime:
+  pythonBin: "python3"
+
+configEnv: {}
+
+opencode:
+  # If set, HTTP probes may return 401 unless you also customize probe auth.
+  serverPassword: ""
 
 nodeSelector: {}
 
