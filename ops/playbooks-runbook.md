@@ -3,11 +3,11 @@
 ## Local pipeline run
 
 ```bash
-export OPENAI_API_KEY=<your_key>
+export AI_MODEL_KEY=<your_key>
 npm run run:mvp
 ```
 
-Or use `direnv` with a local `.envrc` (gitignored) to auto-load `OPENAI_API_KEY`.
+Or use `direnv` with a local `.envrc` (gitignored) to auto-load `AI_MODEL_KEY`.
 
 ## Alternative input examples
 
@@ -87,12 +87,49 @@ hostAliases:
 
 Adjust the IP to your local k8s node/service ingress IP when needed.
 
+Recommended default for euclid catalog in k8s is Cluster DNS:
+
+`http://euclid-catalog-mcp.mcp.svc.cluster.local:8000/sse`
+
+Use hostAliases only when you must pin a fake/local domain.
+
+### Local service access (NodePort for dev)
+
+`values.local.yaml` sets:
+
+```yaml
+service:
+  type: NodePort
+  nodePort: 31634
+```
+
+You can access OpenCode service at `http://<node-ip>:31634`.
+
 ### OpenCode config mount mode
 
 Default mode:
 
 - config PVC mounted at `/home/opencode/.config/opencode`
-- init container seeds `opencode.json` from `ops/opencode.seed.json` on first run
+- init container seeds `opencode.json` from `ops/opencode.seed.json` on each pod start
+
+Mode switch (`opencodeConfig.mode`):
+
+- `seed` (default): managed by chart init-seed + config PVC
+- `secret`: mount `opencode.json` from Kubernetes Secret
+- `external`: chart does not mount config; user provides config via `extraVolumes`/`extraVolumeMounts`
+
+### AI_MODEL_KEY injection in k8s
+
+Set key via Helm value so pod gets `AI_MODEL_KEY` env:
+
+```bash
+helm upgrade --install astro-code helm/astro-code \
+  -n astro-code \
+  -f helm/astro-code/values.local.yaml \
+  --set opencode.aiModelKey='<your-model-api-key>'
+```
+
+This writes `AI_MODEL_KEY` into `astro-code-secret` and mounts it as env var.
 
 Optional secret mode:
 
@@ -102,6 +139,18 @@ Optional secret mode:
   - or set `opencodeConfig.secret.name=<existing-secret>`
 
 When secret mode is enabled, `opencode.json` is mounted read-only from Secret.
+
+External mode example:
+
+```bash
+helm upgrade --install astro-code helm/astro-code \
+  -n astro-code \
+  --create-namespace \
+  -f helm/astro-code/values.local.yaml \
+  --set opencodeConfig.mode=external \
+  --set persistence.config.enabled=false \
+  --set initSeed.enabled=false
+```
 
 Deploy with pushed image + pull secret:
 

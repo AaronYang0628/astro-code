@@ -1,15 +1,17 @@
 image:
   repository: crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code
-  tag: latest
-  pullPolicy: IfNotPresent
+  tag: v20260407-180800
+  pullPolicy: Always
 
-imagePullSecrets:
-  - name: crpi-regcred
 
 replicaCount: 1
 
 ingress:
   enabled: false
+
+service:
+  type: NodePort
+  nodePort: 31634
 
 autoscaling:
   enabled: false
@@ -18,6 +20,9 @@ hostAliases:
   - ip: "192.168.31.111"
     hostnames:
       - "catalog.euclid.mcp.ay.dev"
+
+opencodeConfig:
+  mode: seed
 
 persistence:
   enabled: true
@@ -35,14 +40,10 @@ persistence:
 
 opencode:
   serverPassword: ""
-
-opencodeConfig:
-  secret:
-    enabled: false
-    create: false
-    name: ""
-    opencodeJson: ""
+  aiModelKey: "sk-ss"
 
 extraEnv:
   - name: MCP_INSECURE_TLS
-    value: "1"
+    value: "0"
+  - name: NODE_TLS_REJECT_UNAUTHORIZED
+    value: "0"

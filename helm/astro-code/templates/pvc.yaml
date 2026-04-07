@@ -1,5 +1,5 @@
 {{- if .Values.persistence.enabled }}
-{{- if .Values.persistence.config.enabled }}
+{{- if and .Values.persistence.config.enabled (eq .Values.opencodeConfig.mode "seed") }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

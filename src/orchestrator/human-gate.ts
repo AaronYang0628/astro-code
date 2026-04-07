@@ -137,7 +137,7 @@ export async function resolveHumanFilter(
     const regionRequest = {
       title: "No crossmatch results",
       run_id: context.runId,
-      interaction_plugin: "octto",
+      interaction_mode: "native",
       reason: "No matched rows after DESI query and crossmatch",
       status: {
         desi_rows: context.desiRows,
@@ -179,7 +179,7 @@ export async function resolveHumanFilter(
   const entryRequest = {
     title: "Apply result filter?",
     run_id: context.runId,
-    interaction_plugin: "opencode-confirm",
+    interaction_mode: "native",
     instruction: "Ask user whether to enter filtering stage via native confirm popup. Write response to filter_entry_response.json",
     options: [
       { id: "yes_filter", label: "Yes, start filtering" },
@@ -212,9 +212,9 @@ export async function resolveHumanFilter(
   const requestBody = {
     title: "Post-crossmatch filtering",
     run_id: context.runId,
-    interaction_plugin: "octto",
-    instruction: "Open one octto form and collect all filter conditions at once. Write a single JSON object to human_gate_response.json",
-    preferred_ui: "single_form",
+    interaction_mode: "native",
+    instruction: "Use native popup interactions to collect filter logic and multiple conditions, then write JSON to human_gate_response.json",
+    preferred_ui: "native_popup_chain",
     available_fields: context.availableFields,
     preview_sample: context.previewSample,
     format: {

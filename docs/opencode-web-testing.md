@@ -12,8 +12,8 @@ NODE_TLS_REJECT_UNAUTHORIZED=0 opencode web --port 7788
 
 Expected:
 
-- plugin includes `octto`
 - MCP includes `euclid-catalog` and `astro_k3s_mcp`
+- interaction uses native OpenCode popup flow (no octto dependency)
 - use one chat session end-to-end (do not switch to local `npm run` mid-task)
 
 ## Short Prompt (daily check)
@@ -26,11 +26,11 @@ RA=51.12015772112324, DEC=-26.971838908444358, radiusArcsec=250.0
 1) 先输出匹配参数（RA/DEC、radiusArcsec、window、topK、hits）
 2) 用 RA/DEC 直接构建查询窗口并查询 desi-dr10-tractor（astro_k3s_mcp.es_query, mode=search,size=100）
 3) 执行交叉匹配
-4) 若 hits=0，发起 octto 让我选半径(1/2/3/5 arcsec)，阻塞等待我提交
-5) 收到选择后 3 秒内执行 end_session 关闭 octto，再继续执行后续步骤
+4) 若 hits=0，发起原生弹框让我选半径(1/2/3/5 arcsec)，阻塞等待我提交
+5) 收到选择后继续执行后续步骤
 6) 如果有匹配结果，先输出 preview 摘要（preview rows、可筛选字段、前10条样例）
 7) 使用 OpenCode 原生 confirm 弹框问我“是否进入结果筛选？”
-8) 只有我回答“是”后，才发起 octto 单弹框多条件筛选（一次输入 logic+conditions[]），阻塞等待答案后 end_session 并应用筛选
+8) 只有我回答“是”后，才发起原生弹框多条件筛选（逻辑+多条件），并应用筛选
 
 输出必须包含：
 - hits统计（首次/重试）
@@ -67,16 +67,15 @@ radiusArcsec=250.0
    hits_total = data.result.hits.total.value
    sample_rows = data.result.hits.hits(最多3条)
 5) 若 hits_total==0：
-   - 发起 octto 交互（半径 1/2/3/5 arcsec）
+   - 发起原生弹框交互（半径 1/2/3/5 arcsec）
    - 阻塞等待我的选择（不要继续其他步骤）
-   - 收到后打印：Received octto selection: radius=<X> arcsec
-   - 立即调用 end_session 关闭 octto 会话（不超过3秒）
+   - 收到后打印：Received selection: radius=<X> arcsec
    - 用所选半径继续执行并给出重试结果
 6) 若 crossmatch_rows > 0：
    - 先输出 preview 摘要：`preview rows`、`available filter fields`、前10条样例
    - 通过 OpenCode 原生 confirm 弹框问用户：是否进入结果筛选？
 7) 若用户回答“是”：
-   - 发起 octto 单弹框并一次性收集完整筛选 JSON：
+   - 发起原生弹框并收集完整筛选条件：
      {
        "logic": "and",
        "conditions": [
@@ -84,7 +83,7 @@ radiusArcsec=250.0
          {"field": "class_label", "op": "contains", "value": "327"}
        ]
      }
-   - 阻塞等待输入，收到后立即调用 end_session 关闭 octto 会话（不超过3秒）
+   - 阻塞等待输入并应用筛选
    - 应用筛选并生成 filtered 结果
 8) 最终输出：
    - Euclid 坐标范围
@@ -104,7 +103,7 @@ radiusArcsec=250.0
 
 约束：
 - 不要做大范围仓库扫描
-- 不要在会话中混用本地 npm 流程，保持同一会话内 MCP+octto+继续执行
+- 不要在会话中混用本地 npm 流程，保持同一会话内 MCP+native interaction+继续执行
 ```
 
 ## One-line Recovery Prompt

@@ -88,9 +88,10 @@ npx tsx src/orchestrator/index.ts \
 
 - 上传解析设计为临时文件；Web 层应在提取后删除上传文件。
 - `s3://` 输入委托给 MCP 进行权限和检索处理。
-- OpenCode 提供商 `apiKey` 通过环境变量 `OPENAI_API_KEY` 注入（`.opencode/opencode.json` 中使用 `{env:OPENAI_API_KEY}`）。
+- OpenCode 提供商 `apiKey` 通过环境变量 `AI_MODEL_KEY` 注入（`.opencode/opencode.json` 中使用 `{env:AI_MODEL_KEY}`）。
 - 建议把本地密钥放在 shell 环境变量或 `.envrc`（direnv）中，不要把密钥提交到 git。
-- Octto 通过 `.opencode/opencode.json` 中的 `"plugin": ["octto"]` 启用。
+- 在 k8s Helm 部署中，请设置 `opencode.aiModelKey`，Chart 会通过 Secret 将其注入为 Pod 环境变量 `AI_MODEL_KEY`。
+- 在 k8s/runtime 环境中，默认使用 OpenCode 原生弹框交互（不依赖 octto/xdg-open）。
 
 ## OpenCode 测试
 

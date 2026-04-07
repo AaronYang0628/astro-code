@@ -3,7 +3,7 @@
   "mcp": {
     "euclid-catalog": {
       "type": "remote",
-      "url": "https://catalog.euclid.mcp.ay.dev:32443/sse",
+      "url": "http://euclid-catalog-mcp.mcp.svc.cluster.local:8000/sse",
       "enabled": true
     },
     "astro_k3s_mcp": {
@@ -14,15 +14,12 @@
       "timeout": 15000
     }
   },
-  "plugin": [
-    "octto"
-  ],
   "provider": {
     "openai": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "https://v2.qixuw.com/v1",
-        "apiKey": "{env:OPENAI_API_KEY}"
+        "apiKey": "{env:AI_MODEL_KEY}"
       },
       "models": {
         "gpt-5.3-codex": {

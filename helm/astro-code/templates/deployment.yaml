@@ -39,7 +39,7 @@ spec:
       hostAliases:
         {{- toYaml .Values.hostAliases | nindent 8 }}
 {{- end }}
-{{- if and .Values.initSeed.enabled .Values.persistence.enabled }}
+{{- if and .Values.initSeed.enabled (eq .Values.opencodeConfig.mode "seed") .Values.persistence.enabled .Values.persistence.config.enabled }}
       initContainers:
       - name: init-seed
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -48,20 +48,24 @@ spec:
         args:
           - |
             set -e
-{{- if .Values.persistence.config.enabled }}
             mkdir -p /mnt/config
             cp -f /opt/astro-code-seed/config/opencode.json /mnt/config/opencode.json
-{{- end }}
 {{- if .Values.persistence.workspace.enabled }}
             if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
               mkdir -p /mnt/workspace
               cp -a /opt/astro-code-seed/workspace/. /mnt/workspace/
             fi
+            mkdir -p /mnt/workspace/.opencode
+            cp -f /opt/astro-code-seed/config/opencode.json /mnt/workspace/.opencode/opencode.json
+            if [ -d /opt/astro-code-seed/workspace/.opencode ]; then
+              cp -a /opt/astro-code-seed/workspace/.opencode/. /mnt/workspace/.opencode/
+            fi
+            rm -f /mnt/workspace/.opencode/plugins/octto-interaction.plugin.md || true
 {{- end }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
         volumeMounts:
-{{- if .Values.persistence.config.enabled }}
+{{- if and .Values.persistence.config.enabled (eq .Values.opencodeConfig.mode "seed") }}
         - name: config
           mountPath: /mnt/config
 {{- end }}
@@ -84,8 +88,15 @@ spec:
         envFrom:
         - configMapRef:
             name: {{ include "astro-code.fullname" . }}-config
-{{- if or .Values.extraEnv .Values.opencode.serverPassword }}
+{{- if or .Values.extraEnv .Values.opencode.serverPassword .Values.opencode.aiModelKey }}
         env:
+{{- if .Values.opencode.aiModelKey }}
+        - name: AI_MODEL_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "astro-code.fullname" . }}-secret
+              key: AI_MODEL_KEY
+{{- end }}
 {{- if .Values.opencode.serverPassword }}
         - name: OPENCODE_SERVER_PASSWORD
           valueFrom:
@@ -129,21 +140,15 @@ spec:
           failureThreshold: {{ .Values.probes.startup.failureThreshold }}
 {{- end }}
         volumeMounts:
-{{- if .Values.persistence.config.enabled }}
+{{- if and .Values.persistence.config.enabled (eq .Values.opencodeConfig.mode "seed") }}
         - name: config
           mountPath: /home/opencode/.config/opencode
 {{- end }}
-{{- if .Values.opencodeConfig.secret.enabled }}
-{{- if .Values.persistence.config.enabled }}
+{{- if and .Values.opencodeConfig.secret.enabled (eq .Values.opencodeConfig.mode "secret") }}
         - name: opencode-config-secret
           mountPath: /home/opencode/.config/opencode/opencode.json
           subPath: opencode.json
           readOnly: true
-{{- else }}
-        - name: opencode-config-secret
-          mountPath: /home/opencode/.config/opencode
-          readOnly: true
-{{- end }}
 {{- end }}
 {{- if .Values.persistence.data.enabled }}
         - name: data
@@ -162,7 +167,7 @@ spec:
 {{- toYaml .Values.extraContainers | nindent 8 }}
 {{- end }}
       volumes:
-{{- if .Values.persistence.config.enabled }}
+{{- if and .Values.persistence.config.enabled (eq .Values.opencodeConfig.mode "seed") }}
       - name: config
         persistentVolumeClaim:
           claimName: {{ .Values.persistence.config.existingClaim | default (printf "%s-config" (include "astro-code.fullname" .)) }}
@@ -177,7 +182,7 @@ spec:
         persistentVolumeClaim:
           claimName: {{ .Values.persistence.workspace.existingClaim | default (printf "%s-workspace" (include "astro-code.fullname" .)) }}
 {{- end }}
-{{- if .Values.opencodeConfig.secret.enabled }}
+{{- if and .Values.opencodeConfig.secret.enabled (eq .Values.opencodeConfig.mode "secret") }}
       - name: opencode-config-secret
         secret:
           secretName: {{ include "astro-code.opencodeConfigSecretName" . }}

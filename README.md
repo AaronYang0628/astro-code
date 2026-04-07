@@ -53,7 +53,7 @@ npm run run:mvp
 
 Execution policy:
 
-- Primary flow: OpenCode Web/TUI session execution (direct MCP + octto in same chat session)
+- Primary flow: OpenCode Web/TUI session execution (direct MCP + native OpenCode interactions)
 - Local `npm run` flow: regression/local replay only
 - Do not mix Web HITL and local npm flow in one task
 
@@ -69,17 +69,18 @@ Detailed guides:
 - `s3://` inputs are delegated to MCP for permission and retrieval handling.
 - `npm run` pipeline now uses real MCP servers via `src/orchestrator/mcp-client.ts`.
 - OpenCode path uses MCP servers from `.opencode/opencode.json`.
-- OpenCode provider `apiKey` is loaded from environment variable: `OPENAI_API_KEY` (configured as `{env:OPENAI_API_KEY}` in `.opencode/opencode.json`).
+- OpenCode provider `apiKey` is loaded from environment variable: `AI_MODEL_KEY` (configured as `{env:AI_MODEL_KEY}` in `.opencode/opencode.json`).
 - Put your local key in shell env or `.envrc` (direnv), and never commit keys into git.
-- Octto is enabled as OpenCode plugin via `"plugin": ["octto"]` in `.opencode/opencode.json`.
+- In k8s Helm deployment, set `opencode.aiModelKey` so pod gets `AI_MODEL_KEY` env via Kubernetes Secret.
+- Interaction in k8s/runtime is native OpenCode popup flow; no octto dependency.
 - If Euclid MCP uses self-signed TLS cert, set `MCP_INSECURE_TLS=1` for `npm run` pipeline (or set a trusted CA).
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).
-- When crossmatch has rows, field/value filtering is expected to be collected via octto interaction.
+- When crossmatch has rows, field/value filtering is collected via native OpenCode interaction flow.
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
 - Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
-- Helm supports `hostAliases` for fake/local MCP domains (for example `catalog.euclid.mcp.ay.dev`).
-- OpenCode config mount supports two modes: seeded PVC (default) or Secret-mounted `opencode.json`.
+- Helm supports `hostAliases` for fake/local MCP domains (for example `catalog.euclid.mcp.ay.dev`), but Cluster DNS is recommended.
+- OpenCode config mount supports three modes via `opencodeConfig.mode`: `seed` (default), `secret`, `external`.
 
 ## OpenCode testing
 
@@ -93,7 +94,6 @@ NODE_TLS_REJECT_UNAUTHORIZED=0 opencode web --port 7788
 
 - `opencode web .` is invalid for this CLI version; `web` does not accept project positional args.
 - Project config is loaded from `.opencode/opencode.json`.
-- In `opencode debug config`, confirm `plugin` contains `octto`.
 - If Euclid MCP uses self-signed TLS cert, use `NODE_TLS_REJECT_UNAUTHORIZED=0` for local debugging.
 
 Non-interactive sanity check:

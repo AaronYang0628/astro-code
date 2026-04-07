@@ -11,9 +11,10 @@ keywords:
   - desi
   - crossmatch
   - ai
-home: https://github.com/your-org/astro-code
+home: https://github.com/AaronYang0628/astro-code
 sources:
-  - https://github.com/your-org/astro-code
+  - https://github.com/AaronYang0628/astro-code
+  - https://gitlab.zhejianglab.com/AaronYang/astro-code
 maintainers:
   - name: astro-code-team
-    url: https://github.com/your-org
+    url: https://github.com/AaronYang0628

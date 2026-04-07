@@ -78,5 +78,6 @@ When no matched rows are found, it should also print:
 
 ## Notes
 
-- Do not mix this local flow with an active Web octto session.
+- Do not mix this local flow with an active Web interaction session.
 - Web HITL runs should stay entirely in one OpenCode chat session.
+- This local flow reads `AI_MODEL_KEY` from your shell env; ensure it is set before running.

@@ -50,6 +50,7 @@ securityContext:
 service:
   type: ClusterIP
   port: 4000
+  nodePort: null
   labels: {}
   annotations: {}
   selectors: {}
@@ -130,6 +131,11 @@ initSeed:
   enabled: true
 
 opencodeConfig:
+  mode: seed
+  # modes:
+  # - seed: use init container to copy ops/opencode.seed.json into config volume
+  # - secret: mount opencode.json from Secret
+  # - external: chart does not mount config; user provides via extraVolumes/extraVolumeMounts
   secret:
     enabled: false
     create: false
@@ -143,6 +149,7 @@ configEnv: {}
 
 opencode:
   serverPassword: ""
+  aiModelKey: ""
 
 nodeSelector: {}
 

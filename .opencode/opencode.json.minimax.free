@@ -3,7 +3,7 @@
   "mcp": {
     "euclid-catalog": {
       "type": "remote",
-      "url": "https://catalog.euclid.mcp.ay.dev:32443/sse",
+      "url": "http://euclid-catalog-mcp.mcp.svc.cluster.local:8000/sse",
       "enabled": true
     },
     "astro_k3s_mcp": {
@@ -14,9 +14,6 @@
       "timeout": 15000
     }
   },
-  "plugin": [
-    "octto"
-  ],
   "model": "opencode/minimax-m2.5-free",
   "small_model": "opencode/minimax-m2.5-free",
   "agent": {

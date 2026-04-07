@@ -125,12 +125,6 @@ steps:
     action: request_region_adjustment_if_zero_hits
     depends_on: [desi-query]
     when: "desi_hits_total == 0"
-    plugin:
-      name: octto
-      tool: create_review_task
-      input:
-        reason: "DESI search returned 0 hits"
-        suggestion: "请调整天区范围或更换中心坐标"
 
   - id: crossmatch
     type: transform
@@ -149,9 +143,6 @@ steps:
     agent: filter-agent
     action: request_filter_condition
     depends_on: [preview-export]
-    plugin:
-      name: octto
-      tool: create_filter_form
 
   - id: filtered-export
     type: export
