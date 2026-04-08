@@ -22,7 +22,6 @@ Playbooks are markdown files with YAML frontmatter.
   - `input`: tool input template
 - `on_fail`: failure strategy (`continue` or `stop`) with guidance
 - `output_mapping`: map raw fields to normalized workflow variables
-- `plugin`: optional plugin call for HITL steps
 
 ## Required step ids for current runner
 
@@ -37,9 +36,13 @@ Playbooks are markdown files with YAML frontmatter.
 
 ## Human-in-the-loop behavior
 
-The runner writes `human_gate_request.json` into run directory.
-If `human_gate_response.json` exists, it is used as filter condition.
-If not present, pipeline continues with no filter.
+HITL uses configured backend (`native|octto|hybrid`) and writes auditable requests into `runs/<run_id>/`:
+
+- Zero-hit branch: write `region_adjust_request.json`
+- Filter entry confirmation: write `filter_entry_request.json`, then read `filter_entry_response.json`
+- Filter condition collection: write `human_gate_request.json`, then read `human_gate_response.json`
+
+If no valid filter response exists, pipeline continues without additional filtering.
 
 ## MCP response mapping example
 

@@ -81,3 +81,5 @@ When no matched rows are found, it should also print:
 - Do not mix this local flow with an active Web interaction session.
 - Web HITL runs should stay entirely in one OpenCode chat session.
 - This local flow reads `AI_MODEL_KEY` from your shell env; ensure it is set before running.
+- Interaction backend is controlled by `pipeline.config.yaml` -> `runtime.interaction_backend` (`native|octto|hybrid`).
+- DESI raw MCP responses are now persisted under `runs/<run_id>/mcp/`.

@@ -1,6 +1,6 @@
 image:
   repository: crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code
-  tag: v20260407-180800
+  tag: v20260407-135357
   pullPolicy: Always
 
 
@@ -40,7 +40,7 @@ persistence:
 
 opencode:
   serverPassword: ""
-  aiModelKey: "sk-ss"
+  aiModelKey: "sk-"
 
 extraEnv:
   - name: MCP_INSECURE_TLS

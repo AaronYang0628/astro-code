@@ -18,7 +18,8 @@ const DEFAULT_CONFIG: AppConfig = {
   },
   runtime: {
     python_bin: "python3",
-    strict_playbook_validation: true
+    strict_playbook_validation: true,
+    interaction_backend: "hybrid"
   }
 };
 
@@ -58,7 +59,8 @@ export function loadConfig(configPath: string): AppConfig {
     },
     runtime: {
       python_bin: String(runtime.python_bin ?? DEFAULT_CONFIG.runtime.python_bin),
-      strict_playbook_validation: Boolean(runtime.strict_playbook_validation ?? DEFAULT_CONFIG.runtime.strict_playbook_validation)
+      strict_playbook_validation: Boolean(runtime.strict_playbook_validation ?? DEFAULT_CONFIG.runtime.strict_playbook_validation),
+      interaction_backend: (runtime.interaction_backend as AppConfig["runtime"]["interaction_backend"]) ?? DEFAULT_CONFIG.runtime.interaction_backend
     }
   };
 }

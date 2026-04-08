@@ -4,4 +4,4 @@
 
 opencode config生成还有问题
 
- 此外为什么opencode 的插件栏中还有octto
+ 此外为什么opencode 的插件栏中还有octto（已处理：改为可配置 backend，并提供 octto 插件契约）

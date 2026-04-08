@@ -11,6 +11,26 @@ function parseNumber(value: string): number {
   return n;
 }
 
+function validateUploadFilePath(filePath: string): void {
+  if (!filePath || filePath.trim() === "") {
+    throw new Error("File upload path is empty.");
+  }
+
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Uploaded file not found: ${filePath}`);
+  }
+
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`Uploaded path is not a regular file: ${filePath}`);
+  }
+
+  const lower = filePath.toLowerCase();
+  if (!lower.endsWith(".csv") && !lower.endsWith(".fits") && !lower.endsWith(".fit") && !lower.endsWith(".fts")) {
+    throw new Error(`Unsupported upload file type: ${filePath}. Supported: .csv, .fits, .fit, .fts`);
+  }
+}
+
 export function parseRaDecText(value: string): Coord {
   const cleaned = value.replace(/\s+/g, " ").trim();
   const parts = cleaned.includes(",") ? cleaned.split(",") : cleaned.split(" ");
@@ -31,6 +51,8 @@ export function parseRaDecText(value: string): Coord {
 }
 
 export function extractCoordFromFileWithPython(filePath: string, pythonBin: string): Coord {
+  validateUploadFilePath(filePath);
+
   const proc = spawnSync(
     pythonBin,
     ["py/workers/extract_radec.py", "--file", filePath],
@@ -38,7 +60,10 @@ export function extractCoordFromFileWithPython(filePath: string, pythonBin: stri
   );
 
   if (proc.status !== 0) {
-    throw new Error(`Python extractor failed: ${proc.stderr || proc.stdout}`);
+    const stderr = (proc.stderr ?? "").trim();
+    const stdout = (proc.stdout ?? "").trim();
+    const message = stderr || stdout || "unknown error";
+    throw new Error(`Python extractor failed for ${filePath} (exit=${proc.status ?? "null"}): ${message}`);
   }
 
   const parsed = JSON.parse(proc.stdout) as Coord;

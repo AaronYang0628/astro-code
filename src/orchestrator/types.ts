@@ -1,5 +1,6 @@
 export type InputType = "radec_text" | "file_upload" | "s3_uri";
 export type InteractionMode = "web" | "cli";
+export type InteractionBackend = "native" | "octto" | "hybrid";
 
 export interface InputSpec {
   type: InputType;
@@ -48,6 +49,10 @@ export interface CatalogRecord {
   dec_deg: number;
   mag: number;
   class_label: string;
+  source_system?: string;
+  source_index?: string;
+  source_id?: string;
+  source_path?: string;
 }
 
 export interface CrossmatchRecord {
@@ -112,5 +117,6 @@ export interface AppConfig {
   runtime: {
     python_bin: string;
     strict_playbook_validation: boolean;
+    interaction_backend: InteractionBackend;
   };
 }

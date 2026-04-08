@@ -1,5 +1,26 @@
 # Playbooks Runbook (MVP)
 
+## One-click deploy (recommended)
+
+```bash
+npm run deploy:k8s
+```
+
+This command builds image, deploys Helm, and waits for rollout.
+
+Useful variants:
+
+```bash
+# local k3s import only (no registry push)
+PUSH_IMAGE=0 IMPORT_TO_K3S=1 npm run deploy:k8s
+
+# custom image tag
+TAG=v20260407-150000 npm run deploy:k8s
+
+# local dev setup + smoke
+npm run deploy:dev
+```
+
 ## Local pipeline run
 
 ```bash
@@ -23,7 +44,7 @@ Inspect `runs/<run_id>/` for all generated artifacts.
 ## Troubleshooting
 
 - Python extractor errors: verify `python3` and `astropy` are installed.
-- No filter applied: provide `filter` in request JSON or create `human_gate_response.json`.
+- No filter applied: provide `filter` in request JSON, or complete backend-driven filter confirmation/condition responses (`filter_entry_response.json` and `human_gate_response.json`).
 - Empty crossmatch: increase `radiusArcsec` or verify MCP query output.
 
 ## Build image (local)

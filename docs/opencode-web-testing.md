@@ -13,7 +13,7 @@ NODE_TLS_REJECT_UNAUTHORIZED=0 opencode web --port 7788
 Expected:
 
 - MCP includes `euclid-catalog` and `astro_k3s_mcp`
-- interaction uses native OpenCode popup flow (no octto dependency)
+- interaction backend follows `pipeline.config.yaml` -> `runtime.interaction_backend` (`native|octto|hybrid`)
 - use one chat session end-to-end (do not switch to local `npm run` mid-task)
 
 ## Short Prompt (daily check)
@@ -29,8 +29,8 @@ RA=51.12015772112324, DEC=-26.971838908444358, radiusArcsec=250.0
 4) 若 hits=0，发起原生弹框让我选半径(1/2/3/5 arcsec)，阻塞等待我提交
 5) 收到选择后继续执行后续步骤
 6) 如果有匹配结果，先输出 preview 摘要（preview rows、可筛选字段、前10条样例）
-7) 使用 OpenCode 原生 confirm 弹框问我“是否进入结果筛选？”
-8) 只有我回答“是”后，才发起原生弹框多条件筛选（逻辑+多条件），并应用筛选
+7) 使用当前交互后端（native/octto/hybrid）询问我“是否进入结果筛选？”
+8) 只有我回答“是”后，才发起多条件筛选（逻辑+多条件），并应用筛选
 
 输出必须包含：
 - hits统计（首次/重试）
@@ -72,10 +72,10 @@ radiusArcsec=250.0
    - 收到后打印：Received selection: radius=<X> arcsec
    - 用所选半径继续执行并给出重试结果
 6) 若 crossmatch_rows > 0：
-   - 先输出 preview 摘要：`preview rows`、`available filter fields`、前10条样例
-   - 通过 OpenCode 原生 confirm 弹框问用户：是否进入结果筛选？
+    - 先输出 preview 摘要：`preview rows`、`available filter fields`、前10条样例
+    - 通过当前交互后端问用户：是否进入结果筛选？
 7) 若用户回答“是”：
-   - 发起原生弹框并收集完整筛选条件：
+    - 发起交互收集完整筛选条件（native/octto/hybrid）：
      {
        "logic": "and",
        "conditions": [
@@ -103,7 +103,7 @@ radiusArcsec=250.0
 
 约束：
 - 不要做大范围仓库扫描
-- 不要在会话中混用本地 npm 流程，保持同一会话内 MCP+native interaction+继续执行
+- 不要在会话中混用本地 npm 流程，保持同一会话内 MCP+configured interaction backend+继续执行
 ```
 
 ## One-line Recovery Prompt
@@ -111,6 +111,12 @@ radiusArcsec=250.0
 ```text
 先用 RA=51.12015772112324, DEC=-26.971838908444358 执行一次 DESI search，并仅返回 hits_total 和前3条样例。
 ```
+
+## Step-by-step preset (recommended)
+
+- Reusable preset file: `docs/crossmatch-step-by-step.prompt.md`
+- Use this preset when you need visible step-by-step execution.
+- It auto-continues by default and pauses only when user decisions are required (radius adjust / filter confirm / filter conditions).
 
 ## Notes for current test profile
 

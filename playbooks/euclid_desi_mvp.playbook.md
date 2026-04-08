@@ -3,7 +3,7 @@ id: euclid_desi_mvp
 version: 0.2.0
 description: Euclid x DESI MCP workflow with Euclid normalization and HITL filtering
 meta:
-  mode: interactive
+  mode: configurable_backend
   execution: opencode_session_primary
   local_pipeline: regression_only
   on_error: stop
@@ -159,5 +159,5 @@ This playbook keeps the MVP step ids for current runner compatibility and adds e
 2. Parse Euclid catalog from MCP with fallback.
 3. Normalize Euclid output into a stable query window.
 4. Query DESI via `astro_k3s_mcp.es_query` in `mode=search`.
-5. If `hits=0`, trigger human region-adjust gate.
-6. Export preview, collect filter input, and export filtered files.
+5. If `hits=0`, emit configured-backend region-adjust request and wait for in-session follow-up.
+6. Export preview, run configured-backend filter confirm + multi-condition collection, then export filtered files.

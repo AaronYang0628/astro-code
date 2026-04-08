@@ -35,11 +35,15 @@ async function main(): Promise<void> {
   const result = await runMvpPipeline({
     configPath: path.resolve(configPath),
     playbookPath: path.resolve(playbookPath),
-    requestPath: path.resolve(requestPath)
+    requestPath: path.resolve(requestPath),
+    progress: (line) => {
+      process.stdout.write(`[progress] ${line}\n`);
+    }
   });
 
   process.stdout.write(`Run complete: ${result.runId}\n`);
   process.stdout.write(`Output dir: ${result.runDir}\n`);
+  process.stdout.write(`Execution mode: ${result.summary.executionMode}\n`);
   process.stdout.write(`Matching params: RA=${result.summary.raDeg}, DEC=${result.summary.decDeg}, radiusArcsec=${result.summary.radiusArcsec}, topK=${result.summary.topK}, desiHits=${result.summary.desiHits}\n`);
   process.stdout.write(`Crossmatch rows: ${result.summary.crossmatchRows}\n`);
   process.stdout.write(`Preview rows: ${result.summary.previewRows}\n`);
@@ -53,6 +57,17 @@ async function main(): Promise<void> {
     process.stdout.write(`${table}\n`);
   }
   process.stdout.write(`Crossmatch CSV: ${result.artifacts.crossmatchCsv}\n`);
+  process.stdout.write(`DESI origin: ${result.artifacts.desiOriginJson}\n`);
+  process.stdout.write(`DESI query JSON: ${result.artifacts.desiSearchQueryJson}\n`);
+  process.stdout.write(`DESI raw initial: ${result.artifacts.desiSearchInitialRawJson}\n`);
+  process.stdout.write(`DESI raw sample: ${result.artifacts.desiSearchSampleRawJson}\n`);
+  if (result.artifacts.desiSearchRetryRawJson) {
+    process.stdout.write(`DESI raw retry: ${result.artifacts.desiSearchRetryRawJson}\n`);
+  }
+  if (result.artifacts.desiSearchRetrySampleRawJson) {
+    process.stdout.write(`DESI raw retry sample: ${result.artifacts.desiSearchRetrySampleRawJson}\n`);
+  }
+  process.stdout.write(`Status JSON: ${result.artifacts.statusJson}\n`);
   process.stdout.write(`Preview CSV: ${result.artifacts.previewCsv}\n`);
   process.stdout.write(`Preview summary: ${result.artifacts.previewSummaryJson}\n`);
   process.stdout.write(`Filtered CSV: ${result.artifacts.filteredCsv}\n`);

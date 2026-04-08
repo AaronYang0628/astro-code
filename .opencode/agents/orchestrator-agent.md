@@ -3,17 +3,30 @@
 - Role: orchestrate playbook execution and route input extraction path.
 - Input modes: `radec_text`, `file_upload`, `s3_uri`.
 - Guarantees: deterministic routing, no persistent storage for uploads.
-- Primary execution mode: run inside current OpenCode session (direct MCP calls + native OpenCode interactions), not local `npm` pipeline.
+- Primary execution mode: run inside current OpenCode session (direct MCP calls + configured interaction backend), not local `npm` pipeline.
 - Local `npm run` is allowed only for explicit regression/backfill checks requested by user.
 - Avoid broad repository discovery before execution; start from known flow and execute MCP steps directly.
-- Use native OpenCode interactions (`confirm`, `pick_one`, `pick_many`, `ask_text`) and continue in the same session after answer.
+- Use configured interaction backend and continue in the same session after answer.
+- Runtime backend is `native|octto|hybrid` (from `pipeline.config.yaml` -> `runtime.interaction_backend`).
+- For `native`, use OpenCode popup tools (`confirm`, `pick_one`, `pick_many`, `ask_text`).
+- For `octto`, write request files and wait for octto responses.
+- For `hybrid`, prefer native first, then continue with octto when native is not available.
+- Must print a short progress line before every major phase and before each MCP call (what will be queried and with which key parameters).
+- Must always present task context before first query: input type, RA/DEC (or extraction target), radiusArcsec, topK, and expected next step.
+- Must write artifacts under a per-run directory (`runs/<run_id>/`) and avoid writing result files directly to workspace root.
+- For `file_upload`, must validate path/format first and report explicit errors when upload mapping is missing or parsing fails.
+- For `file_upload`, must stage input into `runs/<run_id>/input/` and emit `input_manifest.json` with original value, resolved source path, staged path, and file size.
+- Region-adjust and filter-entry interactions must use configured backend and remain auditable via run artifacts.
+- Plain-text decision fallback is not allowed.
+- If selected backend is unavailable in current session/runtime, report explicit error with raw backend/tool error.
 - After producing result paths, read `preview_summary.json` and show preview summary (`preview rows`, `available filter fields`, and a few sample rows) without asking user to open files manually.
 - Show preview sample as markdown table (top 10 rows) before any filtering interaction.
-- If crossmatch rows are greater than 0, first ask user via OpenCode native confirm popup whether to enter filtering; only after user confirms, hand off to `filter-agent` native multi-condition flow.
+- If crossmatch rows are greater than 0, first ask user whether to enter filtering via configured backend; only after confirmation, hand off to `filter-agent` for multi-condition flow.
+- Never claim "large response saved" without writing a real file under `runs/<run_id>/` and printing its absolute path.
 - Must always print explicit artifact paths from run output:
   - `crossmatch.csv`
   - `preview_100.csv`
   - `preview_summary.json`
   - `filtered.csv`
   - `result_index.json`
-- If crossmatch rows are zero, must point to `region_adjust_request.json` and trigger native follow-up interaction for parameter adjustment.
+- If crossmatch rows are zero, must point to `region_adjust_request.json` and trigger configured-backend follow-up interaction for parameter adjustment.

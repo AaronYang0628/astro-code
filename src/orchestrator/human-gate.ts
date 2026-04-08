@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { FilterCondition, FilterSpec, InteractionMode } from "./types.js";
+import type { FilterCondition, FilterSpec, InteractionBackend, InteractionMode } from "./types.js";
 
 interface HumanGateContext {
   runId: string;
@@ -118,6 +118,7 @@ function parseShouldFilter(response: unknown): boolean | undefined {
 export async function resolveHumanFilter(
   runDir: string,
   interaction: InteractionMode,
+  interactionBackend: InteractionBackend,
   context: HumanGateContext,
   inlineFilter?: FilterCondition | FilterSpec
 ): Promise<HumanGateResult> {
@@ -137,7 +138,7 @@ export async function resolveHumanFilter(
     const regionRequest = {
       title: "No crossmatch results",
       run_id: context.runId,
-      interaction_mode: "native",
+      interaction_mode: interactionBackend,
       reason: "No matched rows after DESI query and crossmatch",
       status: {
         desi_rows: context.desiRows,
@@ -177,10 +178,10 @@ export async function resolveHumanFilter(
   const entryResponsePath = path.join(runDir, "filter_entry_response.json");
 
   const entryRequest = {
-    title: "Apply result filter?",
-    run_id: context.runId,
-    interaction_mode: "native",
-    instruction: "Ask user whether to enter filtering stage via native confirm popup. Write response to filter_entry_response.json",
+      title: "Apply result filter?",
+      run_id: context.runId,
+      interaction_mode: interactionBackend,
+      instruction: "Ask user whether to enter filtering stage via configured interaction backend (native/octto/hybrid). Write response to filter_entry_response.json",
     options: [
       { id: "yes_filter", label: "Yes, start filtering" },
       { id: "no_skip", label: "No, keep current result" }
@@ -194,14 +195,9 @@ export async function resolveHumanFilter(
 
   fs.writeFileSync(entryRequestPath, JSON.stringify(entryRequest, null, 2));
 
-  if (!fs.existsSync(entryResponsePath)) {
-    return {
-      mode: "filter_confirm",
-      requestFile: entryRequestPath
-    };
-  }
-
-  const shouldFilter = parseShouldFilter(JSON.parse(fs.readFileSync(entryResponsePath, "utf8")));
+  const shouldFilter = fs.existsSync(entryResponsePath)
+    ? parseShouldFilter(JSON.parse(fs.readFileSync(entryResponsePath, "utf8")))
+    : undefined;
   if (shouldFilter !== true) {
     return {
       mode: "none",
@@ -210,11 +206,11 @@ export async function resolveHumanFilter(
   }
 
   const requestBody = {
-    title: "Post-crossmatch filtering",
-    run_id: context.runId,
-    interaction_mode: "native",
-    instruction: "Use native popup interactions to collect filter logic and multiple conditions, then write JSON to human_gate_response.json",
-    preferred_ui: "native_popup_chain",
+      title: "Post-crossmatch filtering",
+      run_id: context.runId,
+      interaction_mode: interactionBackend,
+      instruction: "Use configured interaction backend (native/octto/hybrid) to collect filter logic and multiple conditions, then write JSON to human_gate_response.json",
+      preferred_ui: interactionBackend === "octto" ? "octto_form_chain" : interactionBackend === "hybrid" ? "native_then_octto" : "native_popup_chain",
     available_fields: context.availableFields,
     preview_sample: context.previewSample,
     format: {
@@ -236,18 +232,12 @@ export async function resolveHumanFilter(
 
   fs.writeFileSync(requestPath, JSON.stringify(requestBody, null, 2));
 
-  if (fs.existsSync(responsePath)) {
-    const response = JSON.parse(fs.readFileSync(responsePath, "utf8"));
-    const filter = normalizeFilter(response);
-    return {
-      filter,
-      mode: filter ? "filter" : "none",
-      requestFile: requestPath
-    };
-  }
-
+  const filter = fs.existsSync(responsePath)
+    ? normalizeFilter(JSON.parse(fs.readFileSync(responsePath, "utf8")))
+    : undefined;
   return {
-    mode: "filter_confirm",
+    filter,
+    mode: filter ? "filter" : "none",
     requestFile: requestPath
   };
 }

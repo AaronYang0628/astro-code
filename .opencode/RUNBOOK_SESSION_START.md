@@ -16,7 +16,7 @@
 
 ## 3) 运行模式确认
 
-- 优先 OpenCode 会话内执行（MCP + 原生弹框交互）
+- 优先 OpenCode 会话内执行（MCP + 配置化交互后端 native/octto/hybrid）
 - `npm run` 仅用于本地回归，不与实时会话混用
 
 ## 4) 测试入口建议
@@ -43,5 +43,5 @@
 1) 先检查 MCP 与部署状态
 2) 按 Euclid x DESI 主流程跑一轮
 3) 输出匹配参数、preview markdown 表格、结果文件路径
-4) 如需筛选，使用原生交互继续，不要切换到 octto
+4) 如需筛选，按 `runtime.interaction_backend` 使用 native/octto/hybrid 继续
 ```

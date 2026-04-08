@@ -55,12 +55,12 @@ spec:
               mkdir -p /mnt/workspace
               cp -a /opt/astro-code-seed/workspace/. /mnt/workspace/
             fi
+            mkdir -p /mnt/workspace/runs
             mkdir -p /mnt/workspace/.opencode
             cp -f /opt/astro-code-seed/config/opencode.json /mnt/workspace/.opencode/opencode.json
             if [ -d /opt/astro-code-seed/workspace/.opencode ]; then
               cp -a /opt/astro-code-seed/workspace/.opencode/. /mnt/workspace/.opencode/
             fi
-            rm -f /mnt/workspace/.opencode/plugins/octto-interaction.plugin.md || true
 {{- end }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}

@@ -20,7 +20,7 @@ Multi-agent astronomy workflow project focused on Euclid x DESI MVP flow.
 - `src/orchestrator/`: TypeScript orchestration MVP
 - `py/workers/`: Python helpers for CSV/FITS coordinate extraction
 - `.opencode/agents|skills|plugins/`: contracts for agentic runtime
-- `runs/`: runtime outputs (`crossmatch.csv`, `preview_100.csv`, `filtered.csv`)
+- `runs/`: runtime outputs (`status.json`, `crossmatch.csv`, `preview_100.csv`, `filtered.csv`)
 - `docs/`: architecture and contracts
 
 ## Quick start
@@ -46,16 +46,26 @@ npm run run:mvp
 - `stats.json`
 - `report.md`
 - `result_index.json`
+- `status.json` (phase/status/error for live troubleshooting)
+- `input_manifest.json`
 - `region_adjust_request.json` (only when no crossmatch results)
 - `preview_summary.json` (preview count + sample rows + filterable fields)
+- `desi_origin.json` (DESI source metadata: ES/S3/local hint + source path when exposed)
+- `mcp/desi_search_query.json`
+- `mcp/desi_search_initial.raw.json`
+- `mcp/desi_search_sample.raw.json`
+- `mcp/desi_search_retry.raw.json` (only when retry triggered)
+- `mcp/desi_search_retry_sample.raw.json` (only when retry triggered)
+
+All files are written under `runs/<run_id>/`.
 
 ## Testing
 
 Execution policy:
 
-- Primary flow: OpenCode Web/TUI session execution (direct MCP + native OpenCode interactions)
-- Local `npm run` flow: regression/local replay only
-- Do not mix Web HITL and local npm flow in one task
+- Web and CLI now share one TypeScript orchestrator pipeline and one run artifact model.
+- Both entries execute MCP queries + crossmatch + human gate via same state machine.
+- Every run writes `runs/<run_id>/status.json` first, then updates phase/metrics/artifacts until completion.
 
 Detailed guides:
 
@@ -65,22 +75,45 @@ Detailed guides:
 
 ## Notes
 
-- Upload parsing is designed for transient files; web layer should remove uploads after extraction.
+- Upload staging/search is handled in TS orchestrator (supports home-based OpenCode cache dirs and `UPLOAD_SEARCH_DIRS`).
 - `s3://` inputs are delegated to MCP for permission and retrieval handling.
 - `npm run` pipeline now uses real MCP servers via `src/orchestrator/mcp-client.ts`.
 - OpenCode path uses MCP servers from `.opencode/opencode.json`.
 - OpenCode provider `apiKey` is loaded from environment variable: `AI_MODEL_KEY` (configured as `{env:AI_MODEL_KEY}` in `.opencode/opencode.json`).
 - Put your local key in shell env or `.envrc` (direnv), and never commit keys into git.
 - In k8s Helm deployment, set `opencode.aiModelKey` so pod gets `AI_MODEL_KEY` env via Kubernetes Secret.
-- Interaction in k8s/runtime is native OpenCode popup flow; no octto dependency.
+- Interaction backend is configurable via `pipeline.config.yaml` -> `runtime.interaction_backend`:
+  - `native`: OpenCode popup only
+  - `octto`: octto-only interaction
+  - `hybrid`: native first, octto fallback
 - If Euclid MCP uses self-signed TLS cert, set `MCP_INSECURE_TLS=1` for `npm run` pipeline (or set a trusted CA).
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).
-- When crossmatch has rows, field/value filtering is collected via native OpenCode interaction flow.
+- When crossmatch has rows, field/value filtering is collected via configured backend (`native|octto|hybrid`).
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
 - Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
 - Helm supports `hostAliases` for fake/local MCP domains (for example `catalog.euclid.mcp.ay.dev`), but Cluster DNS is recommended.
 - OpenCode config mount supports three modes via `opencodeConfig.mode`: `seed` (default), `secret`, `external`.
+
+## Octto plugin
+
+To use octto-driven interaction, install your octto plugin contract to:
+
+- `.opencode/plugins/octto-interaction.plugin.md`
+
+Then set backend in `pipeline.config.yaml`:
+
+```yaml
+runtime:
+  interaction_backend: octto
+```
+
+Or use hybrid fallback:
+
+```yaml
+runtime:
+  interaction_backend: hybrid
+```
 
 ## OpenCode testing
 

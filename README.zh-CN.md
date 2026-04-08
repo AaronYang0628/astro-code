@@ -20,7 +20,7 @@
 - `src/orchestrator/`: TypeScript 编排在 MVP 实现
 - `py/workers/`: Python 辅助脚本，用于 CSV/FITS 坐标提取
 - `.opencode/agents|skills|plugins/`: 智能体运行时契约
-- `runs/`: 运行时输出（`crossmatch.csv`、`preview_100.csv`、`filtered.csv`）
+- `runs/`: 运行时输出（`status.json`、`crossmatch.csv`、`preview_100.csv`、`filtered.csv`）
 - `docs/`: 架构和契约文档
 
 ## 快速开始
@@ -83,15 +83,55 @@ npx tsx src/orchestrator/index.ts \
 - `filtered.csv`
 - `stats.json`
 - `report.md`
+- `result_index.json`
+- `input_manifest.json`
+- `status.json`（实时阶段/状态/错误信息）
+- `desi_origin.json`（DESI 来源元数据：ES/S3/local 提示 + 若暴露则包含源路径）
+- `mcp/desi_search_query.json`
+- `mcp/desi_search_initial.raw.json`
+- `mcp/desi_search_sample.raw.json`
+- `mcp/desi_search_retry.raw.json`（仅在触发 retry 时）
+- `mcp/desi_search_retry_sample.raw.json`（仅在触发 retry 时）
+
+所有产物文件均写入 `runs/<run_id>/` 目录。
+
+## 执行策略
+
+- Web 与 CLI 现在使用同一条 TypeScript orchestrator 执行内核。
+- 两个入口都走同一状态机（MCP 查询 + crossmatch + human gate + 导出）。
+- 每次运行会先写入 `runs/<run_id>/status.json`，随后持续更新阶段、统计与产物信息。
 
 ## 注意事项
 
-- 上传解析设计为临时文件；Web 层应在提取后删除上传文件。
+- 上传路径解析与暂存由 TS orchestrator 统一处理（支持基于用户 home 的 OpenCode 缓存目录和 `UPLOAD_SEARCH_DIRS`）。
 - `s3://` 输入委托给 MCP 进行权限和检索处理。
 - OpenCode 提供商 `apiKey` 通过环境变量 `AI_MODEL_KEY` 注入（`.opencode/opencode.json` 中使用 `{env:AI_MODEL_KEY}`）。
 - 建议把本地密钥放在 shell 环境变量或 `.envrc`（direnv）中，不要把密钥提交到 git。
 - 在 k8s Helm 部署中，请设置 `opencode.aiModelKey`，Chart 会通过 Secret 将其注入为 Pod 环境变量 `AI_MODEL_KEY`。
-- 在 k8s/runtime 环境中，默认使用 OpenCode 原生弹框交互（不依赖 octto/xdg-open）。
+- 交互后端可通过 `pipeline.config.yaml` 中 `runtime.interaction_backend` 配置：
+  - `native`：仅 OpenCode 原生弹框
+  - `octto`：仅 octto 交互
+  - `hybrid`：优先 native，失败时切 octto
+
+## Octto 插件
+
+若要启用 octto 交互，请将 octto 插件契约文件放到：
+
+- `.opencode/plugins/octto-interaction.plugin.md`
+
+并在 `pipeline.config.yaml` 设置：
+
+```yaml
+runtime:
+  interaction_backend: octto
+```
+
+或使用混合模式：
+
+```yaml
+runtime:
+  interaction_backend: hybrid
+```
 
 ## OpenCode 测试
 

@@ -13,9 +13,16 @@
 5. 询问用户是否进入筛选
 6. 用户确认后进行多条件筛选，并输出结果文件
 
+## 执行可观测性（必须）
+
+- 在首次 MCP 调用前，先输出任务说明与关键参数
+- 每个阶段和每次 MCP 调用前输出进度提示
+- 上传文件流程先做路径/格式校验，失败要直接报错，不可静默
+- 结果统一写入 `runs/<run_id>/`，禁止落在 workspace 根目录
+
 ## 关键约束
 
-- k8s/runtime 场景：使用 OpenCode 原生交互，不依赖 octto/xdg-open
+- 交互后端可配置：`native|octto|hybrid`（由 `runtime.interaction_backend` 控制）
 - MCP 优先走 Cluster DNS（可保留 hostAliases 作为兜底）
 - 模型密钥与配置解耦：`apiKey` 使用 `{env:AI_MODEL_KEY}`
 - 结果必须输出明确文件路径与可读预览

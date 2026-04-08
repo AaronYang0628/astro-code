@@ -9,7 +9,7 @@ This repository implements the MVP for Euclid x DESI crossmatch with a multi-age
 - Keep orchestration explicit through playbooks.
 - Keep catalog-specific logic in catalog agents.
 - Keep storage file-based for now.
-- Keep web interaction as primary and CLI as secondary.
+- Keep one TypeScript execution kernel for both Web and CLI entries.
 
 ## Runtime flow
 
@@ -18,11 +18,18 @@ This repository implements the MVP for Euclid x DESI crossmatch with a multi-age
 3. Euclid and DESI agents query MCP endpoints.
 4. Crossmatch agent computes positional match with configurable radius.
 5. Reporter writes `crossmatch.csv` and `preview_100.csv`.
-6. Human gate captures filter condition.
+6. Human gates run in the same pipeline state machine using configured backend (`native|octto|hybrid`).
 7. Reporter writes `filtered.csv` and `report.md`.
 
 ## Output model
 
 - No database in MVP.
 - Per-run folder: `runs/<run_id>/`
-- Key files: `crossmatch.csv`, `preview_100.csv`, `filtered.csv`, `stats.json`, `report.md`
+- Key files: `status.json`, `crossmatch.csv`, `preview_100.csv`, `filtered.csv`, `stats.json`, `report.md`, `result_index.json`
+- DESI trace files under run dir:
+  - `desi_origin.json`
+  - `mcp/desi_search_query.json`
+  - `mcp/desi_search_initial.raw.json`
+  - `mcp/desi_search_sample.raw.json`
+  - (optional) `mcp/desi_search_retry.raw.json`
+  - (optional) `mcp/desi_search_retry_sample.raw.json`

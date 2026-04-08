@@ -13,4 +13,7 @@ Current plugin families:
 
 - MCP catalog query (`mcp-euclid`, `mcp-desi`)
 - MCP S3 reader (`mcp-s3-reader`)
-- Human interaction: use native OpenCode popup interactions in runtime
+- Human interaction backends:
+  - native OpenCode popup interactions
+  - octto plugin/form workflow
+  - hybrid (native first, octto fallback)
