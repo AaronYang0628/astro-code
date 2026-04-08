@@ -12,7 +12,9 @@ Allow user adjustment after crossmatch and before final export.
 Interaction policy:
 
 - For radius choice, filter-entry confirmation, and filter condition collection, use configured backend (`native`/`octto`/`hybrid`).
-- In `hybrid`, native is preferred and octto is used when native is unavailable.
+- In `hybrid`, octto is preferred and native is used when octto is unavailable.
+- In `hybrid`, if runtime agent list already contains `octto`, interaction must go through octto first.
+- Native `Session not found: current` is treated as native-session error and must not block octto path.
 - Text fallback for decisions is disallowed.
 - If selected backend is unavailable, stop with explicit raw backend error.
 

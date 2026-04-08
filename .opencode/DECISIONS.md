@@ -4,6 +4,8 @@
 
 - 决策：交互后端支持 `native|octto|hybrid`，由 `runtime.interaction_backend` 控制。
 - 原因：保留原生交互同时支持 octto 扩展，兼顾稳定性与体验可定制。
+- 规则补充：`hybrid` 语义固定为“优先 octto，失败再回退 native”。
+- 规则补充：仅当用户意图明确为“执行交叉匹配”时进入分步执行；参数提及本身不等于执行意图。
 
 ## 2026-04-07 — 密钥命名统一为 AI_MODEL_KEY
 

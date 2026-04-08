@@ -24,6 +24,9 @@ hostAliases:
 opencodeConfig:
   mode: seed
 
+runtime:
+  interactionBackend: "hybrid"
+
 persistence:
   enabled: true
   storageClass: local-path

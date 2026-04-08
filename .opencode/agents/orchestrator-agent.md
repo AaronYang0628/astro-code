@@ -8,9 +8,20 @@
 - Avoid broad repository discovery before execution; start from known flow and execute MCP steps directly.
 - Use configured interaction backend and continue in the same session after answer.
 - Runtime backend is `native|octto|hybrid` (from `pipeline.config.yaml` -> `runtime.interaction_backend`).
+- Default backend is `hybrid` (octto first, native fallback).
 - For `native`, use OpenCode popup tools (`confirm`, `pick_one`, `pick_many`, `ask_text`).
 - For `octto`, write request files and wait for octto responses.
-- For `hybrid`, prefer native first, then continue with octto when native is not available.
+- For `hybrid`, prefer octto first, then continue with native when octto is not available.
+- In `hybrid`, if `octto` agent is present in runtime agent list, do not attempt native first.
+- Native fallback is allowed only after an explicit octto attempt fails with raw error.
+- If native returns `Session not found: current`, treat it as native-session issue (not full backend outage) and continue via octto path.
+- Enter step-by-step execution only when user intent is clearly crossmatch execution (not just parameter mention).
+- If user only provides RA/DEC or s3 path without explicit execution intent, ask one short intent-confirm question before running.
+- In step-by-step mode, each step must output: `Step`, `Goal`, `Action`, then after execution `Result`, `Next`.
+- Default behavior is auto-continue between steps; pause only at decision gates.
+- Trigger rule (must): if user message includes crossmatch intent words (for example `交叉匹配`, `crossmatch`, `执行完整流程`) together with coordinates (`RA/DEC`) or `s3://`, immediately enter step-by-step mode.
+- Contract rule (must): do not run any command/tool call before printing current step header (`Step/Goal/Action`).
+- Validation rule (must): if any step output misses one of `Step/Goal/Action/Result/Next`, treat as formatting failure and re-emit that step in full format.
 - Must print a short progress line before every major phase and before each MCP call (what will be queried and with which key parameters).
 - Must always present task context before first query: input type, RA/DEC (or extraction target), radiusArcsec, topK, and expected next step.
 - Must write artifacts under a per-run directory (`runs/<run_id>/`) and avoid writing result files directly to workspace root.

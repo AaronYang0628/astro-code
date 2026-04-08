@@ -16,4 +16,4 @@ Current plugin families:
 - Human interaction backends:
   - native OpenCode popup interactions
   - octto plugin/form workflow
-  - hybrid (native first, octto fallback)
+  - hybrid (octto first, native fallback)

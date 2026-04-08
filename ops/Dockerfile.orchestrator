@@ -12,8 +12,11 @@ RUN pip install --break-system-packages --no-cache-dir -r /tmp/requirements.txt
 
 COPY . /opt/astro-code-seed/workspace
 
+RUN cd /opt/astro-code-seed/workspace/.opencode && npm install
+
 RUN mkdir -p /opt/astro-code-seed/config \
     && cp /opt/astro-code-seed/workspace/ops/opencode.seed.json /opt/astro-code-seed/config/opencode.json \
+    && cp /opt/astro-code-seed/workspace/ops/octto.seed.json /opt/astro-code-seed/config/octto.json \
     && mkdir -p /home/opencode/workspace/runs
 
 WORKDIR /home/opencode/workspace

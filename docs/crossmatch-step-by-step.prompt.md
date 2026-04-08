@@ -19,6 +19,7 @@ Use this preset to force visible, one-step-at-a-time execution in Web/TUI.
    - 是否进入结果筛选（confirm）
    - 多条件筛选参数填写
 6) 所有决策点必须通过当前交互后端执行（`native|octto|hybrid`，由 `runtime.interaction_backend` 决定）。
+   默认后端为 `hybrid`（优先 octto，失败回退 native）。
    不允许用纯文本问答替代决策。
    若后端不可用：立即报错并停止，不得静默降级。
 7) 不允许“口头判断不可用”。必须先真实调用一次后端交互再下结论。
@@ -26,7 +27,7 @@ Use this preset to force visible, one-step-at-a-time execution in Web/TUI.
    - 若调用失败：输出原始工具错误，再停止。
 8) 若失败：先给 Failed 原因，再给 Fix Step（最小修复动作），修复后继续执行。
 9) 仅做当前步骤所需最小操作，不做大范围仓库扫描。
-10) 全程保持同一会话（MCP + 原生交互 + 后续步骤）。
+10) 全程保持同一会话（MCP + 当前交互后端 + 后续步骤）。
 
 本次输入参数：
 RA=51.12015772112324

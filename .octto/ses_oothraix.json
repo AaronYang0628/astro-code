@@ -1,0 +1,121 @@
+{
+  "session_id": "ses_oothraix",
+  "browser_session_id": "ses_etjnel4g",
+  "request": "I want to add a caching layer to the API",
+  "created_at": 1775636494068,
+  "updated_at": 1775636494103,
+  "branches": {
+    "cache_scope": {
+      "id": "cache_scope",
+      "scope": "Which API endpoints or data should be cached and at what granularity",
+      "status": "exploring",
+      "questions": [
+        {
+          "id": "q_8n2nwx8w",
+          "type": "pick_many",
+          "text": "Which parts of the API should be cached?",
+          "config": {
+            "question": "Which parts of the API should be cached?",
+            "options": [
+              {
+                "id": "read_endpoints",
+                "label": "Read-only endpoints (GET/list/detail)"
+              },
+              {
+                "id": "search_results",
+                "label": "Search/query results"
+              },
+              {
+                "id": "computed_views",
+                "label": "Aggregated/computed responses"
+              },
+              {
+                "id": "auth_metadata",
+                "label": "Auth/session metadata"
+              },
+              {
+                "id": "static_config",
+                "label": "Static configuration/reference data"
+              }
+            ],
+            "min": 1
+          }
+        }
+      ],
+      "finding": null
+    },
+    "cache_strategy": {
+      "id": "cache_strategy",
+      "scope": "Caching policy details like TTLs, invalidation, and consistency requirements",
+      "status": "exploring",
+      "questions": [
+        {
+          "id": "q_0ssb3nbn",
+          "type": "pick_one",
+          "text": "Which cache consistency strategy should we favor?",
+          "config": {
+            "question": "Which cache consistency strategy should we favor?",
+            "options": [
+              {
+                "id": "ttl_only",
+                "label": "TTL-based (eventual consistency)"
+              },
+              {
+                "id": "write_through",
+                "label": "Write-through with explicit invalidation"
+              },
+              {
+                "id": "write_back",
+                "label": "Write-back (async persistence)"
+              },
+              {
+                "id": "stale_while_revalidate",
+                "label": "Stale-while-revalidate"
+              }
+            ]
+          }
+        }
+      ],
+      "finding": null
+    },
+    "cache_infra": {
+      "id": "cache_infra",
+      "scope": "Cache backend selection and deployment topology",
+      "status": "exploring",
+      "questions": [
+        {
+          "id": "q_lt1vht05",
+          "type": "pick_one",
+          "text": "What cache backend should we target?",
+          "config": {
+            "question": "What cache backend should we target?",
+            "options": [
+              {
+                "id": "in_memory",
+                "label": "In-memory per instance"
+              },
+              {
+                "id": "redis",
+                "label": "Redis (shared/distributed)"
+              },
+              {
+                "id": "memcached",
+                "label": "Memcached"
+              },
+              {
+                "id": "cdn_edge",
+                "label": "CDN/edge cache for public responses"
+              }
+            ]
+          }
+        }
+      ],
+      "finding": null
+    }
+  },
+  "branch_order": [
+    "cache_scope",
+    "cache_strategy",
+    "cache_infra"
+  ]
+}

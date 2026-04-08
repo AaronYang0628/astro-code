@@ -111,13 +111,16 @@ npx tsx src/orchestrator/index.ts \
 - 交互后端可通过 `pipeline.config.yaml` 中 `runtime.interaction_backend` 配置：
   - `native`：仅 OpenCode 原生弹框
   - `octto`：仅 octto 交互
-  - `hybrid`：优先 native，失败时切 octto
+  - `hybrid`：优先 octto，失败时切 native
 
 ## Octto 插件
 
 若要启用 octto 交互，请将 octto 插件契约文件放到：
 
 - `.opencode/plugins/octto-interaction.plugin.md`
+
+运行镜像已预装 npm 包 `octto`，并在 `opencode.json` 中启用对应 plugin。
+同时会下发可选运行配置 `.opencode/octto.json`（容器内对应 `/home/opencode/.config/opencode/octto.json`）。
 
 并在 `pipeline.config.yaml` 设置：
 

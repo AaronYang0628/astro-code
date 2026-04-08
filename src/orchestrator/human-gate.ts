@@ -181,7 +181,7 @@ export async function resolveHumanFilter(
       title: "Apply result filter?",
       run_id: context.runId,
       interaction_mode: interactionBackend,
-      instruction: "Ask user whether to enter filtering stage via configured interaction backend (native/octto/hybrid). Write response to filter_entry_response.json",
+      instruction: "Ask user whether to enter filtering stage via configured interaction backend (native/octto/hybrid). For hybrid, prefer octto and fallback to native. Write response to filter_entry_response.json",
     options: [
       { id: "yes_filter", label: "Yes, start filtering" },
       { id: "no_skip", label: "No, keep current result" }
@@ -209,8 +209,8 @@ export async function resolveHumanFilter(
       title: "Post-crossmatch filtering",
       run_id: context.runId,
       interaction_mode: interactionBackend,
-      instruction: "Use configured interaction backend (native/octto/hybrid) to collect filter logic and multiple conditions, then write JSON to human_gate_response.json",
-      preferred_ui: interactionBackend === "octto" ? "octto_form_chain" : interactionBackend === "hybrid" ? "native_then_octto" : "native_popup_chain",
+      instruction: "Use configured interaction backend (native/octto/hybrid) to collect filter logic and multiple conditions, then write JSON to human_gate_response.json. For hybrid, prefer octto and fallback to native.",
+      preferred_ui: interactionBackend === "octto" ? "octto_form_chain" : interactionBackend === "hybrid" ? "octto_then_native" : "native_popup_chain",
     available_fields: context.availableFields,
     preview_sample: context.previewSample,
     format: {

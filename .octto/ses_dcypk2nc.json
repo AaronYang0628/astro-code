@@ -1,0 +1,81 @@
+{
+  "session_id": "ses_dcypk2nc",
+  "browser_session_id": "ses_gx9fblyc",
+  "request": "quick octto test",
+  "created_at": 1775636835107,
+  "updated_at": 1775636835144,
+  "branches": {
+    "test_goal": {
+      "id": "test_goal",
+      "scope": "Clarify the primary outcome of the quick octto test",
+      "status": "exploring",
+      "questions": [
+        {
+          "id": "q_niw1e9ie",
+          "type": "pick_one",
+          "text": "What’s the main goal of this quick octto test?",
+          "config": {
+            "question": "What’s the main goal of this quick octto test?",
+            "options": [
+              {
+                "id": "ui_flow",
+                "label": "Validate the UI flow (questions appear, answers collected)"
+              },
+              {
+                "id": "tooling",
+                "label": "Verify tool integration (start/get/close session)"
+              },
+              {
+                "id": "content",
+                "label": "Check question content and phrasing quality"
+              },
+              {
+                "id": "timing",
+                "label": "Confirm response timing/latency behavior"
+              }
+            ]
+          }
+        }
+      ],
+      "finding": null
+    },
+    "test_setup": {
+      "id": "test_setup",
+      "scope": "Define the minimal setup for the quick test",
+      "status": "exploring",
+      "questions": [
+        {
+          "id": "q_055x5kz7",
+          "type": "pick_one",
+          "text": "How should the quick test be set up?",
+          "config": {
+            "question": "How should the quick test be set up?",
+            "options": [
+              {
+                "id": "single_question",
+                "label": "Single question only"
+              },
+              {
+                "id": "two_step",
+                "label": "Two-step (ask + confirm)"
+              },
+              {
+                "id": "multi_choice",
+                "label": "Multiple choice selection"
+              },
+              {
+                "id": "mixed",
+                "label": "Mixed types (e.g., pick_one + ask_text)"
+              }
+            ]
+          }
+        }
+      ],
+      "finding": null
+    }
+  },
+  "branch_order": [
+    "test_goal",
+    "test_setup"
+  ]
+}

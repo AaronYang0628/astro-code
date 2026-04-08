@@ -27,6 +27,17 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function normalizeInteractionBackend(value: unknown, fallback: AppConfig["runtime"]["interaction_backend"]): AppConfig["runtime"]["interaction_backend"] {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "native" || normalized === "octto" || normalized === "hybrid") {
+    return normalized;
+  }
+  return fallback;
+}
+
 export function loadConfig(configPath: string): AppConfig {
   const absolute = path.resolve(configPath);
   if (!fs.existsSync(absolute)) {
@@ -43,6 +54,7 @@ export function loadConfig(configPath: string): AppConfig {
   const defaults = isObject(parsed.defaults) ? parsed.defaults : {};
   const paths = isObject(parsed.paths) ? parsed.paths : {};
   const runtime = isObject(parsed.runtime) ? parsed.runtime : {};
+  const envInteractionBackend = process.env.INTERACTION_BACKEND;
 
   return {
     defaults: {
@@ -60,7 +72,10 @@ export function loadConfig(configPath: string): AppConfig {
     runtime: {
       python_bin: String(runtime.python_bin ?? DEFAULT_CONFIG.runtime.python_bin),
       strict_playbook_validation: Boolean(runtime.strict_playbook_validation ?? DEFAULT_CONFIG.runtime.strict_playbook_validation),
-      interaction_backend: (runtime.interaction_backend as AppConfig["runtime"]["interaction_backend"]) ?? DEFAULT_CONFIG.runtime.interaction_backend
+      interaction_backend: normalizeInteractionBackend(
+        envInteractionBackend ?? runtime.interaction_backend,
+        DEFAULT_CONFIG.runtime.interaction_backend
+      )
     }
   };
 }

@@ -14,6 +14,7 @@ Expected:
 
 - MCP includes `euclid-catalog` and `astro_k3s_mcp`
 - interaction backend follows `pipeline.config.yaml` -> `runtime.interaction_backend` (`native|octto|hybrid`)
+- default backend is `hybrid` (octto first, native fallback)
 - use one chat session end-to-end (do not switch to local `npm run` mid-task)
 
 ## Short Prompt (daily check)
@@ -26,7 +27,7 @@ RA=51.12015772112324, DEC=-26.971838908444358, radiusArcsec=250.0
 1) 先输出匹配参数（RA/DEC、radiusArcsec、window、topK、hits）
 2) 用 RA/DEC 直接构建查询窗口并查询 desi-dr10-tractor（astro_k3s_mcp.es_query, mode=search,size=100）
 3) 执行交叉匹配
-4) 若 hits=0，发起原生弹框让我选半径(1/2/3/5 arcsec)，阻塞等待我提交
+4) 若 hits=0，发起当前交互后端让我选半径(1/2/3/5 arcsec)，阻塞等待我提交
 5) 收到选择后继续执行后续步骤
 6) 如果有匹配结果，先输出 preview 摘要（preview rows、可筛选字段、前10条样例）
 7) 使用当前交互后端（native/octto/hybrid）询问我“是否进入结果筛选？”
@@ -67,7 +68,7 @@ radiusArcsec=250.0
    hits_total = data.result.hits.total.value
    sample_rows = data.result.hits.hits(最多3条)
 5) 若 hits_total==0：
-   - 发起原生弹框交互（半径 1/2/3/5 arcsec）
+   - 发起当前交互后端（hybrid 默认优先 octto，失败回退 native）选择半径（1/2/3/5 arcsec）
    - 阻塞等待我的选择（不要继续其他步骤）
    - 收到后打印：Received selection: radius=<X> arcsec
    - 用所选半径继续执行并给出重试结果
@@ -111,6 +112,16 @@ radiusArcsec=250.0
 ```text
 先用 RA=51.12015772112324, DEC=-26.971838908444358 执行一次 DESI search，并仅返回 hits_total 和前3条样例。
 ```
+
+## Minimal full-run trigger
+
+Use this short prompt to force full step-by-step execution:
+
+```text
+使用 RA=<ra>，DEC=<dec>，radiusArcsec=<radius> 执行一次完整星表交叉匹配流程。
+```
+
+Expected behavior: agent must print each step as `Step / Goal / Action / Result / Next` and only pause at decision gates.
 
 ## Step-by-step preset (recommended)
 

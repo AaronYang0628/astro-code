@@ -85,7 +85,7 @@ Detailed guides:
 - Interaction backend is configurable via `pipeline.config.yaml` -> `runtime.interaction_backend`:
   - `native`: OpenCode popup only
   - `octto`: octto-only interaction
-  - `hybrid`: native first, octto fallback
+  - `hybrid`: octto first, native fallback
 - If Euclid MCP uses self-signed TLS cert, set `MCP_INSECURE_TLS=1` for `npm run` pipeline (or set a trusted CA).
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).
 - When crossmatch has rows, field/value filtering is collected via configured backend (`native|octto|hybrid`).
@@ -100,6 +100,9 @@ Detailed guides:
 To use octto-driven interaction, install your octto plugin contract to:
 
 - `.opencode/plugins/octto-interaction.plugin.md`
+
+Runtime image now preinstalls npm package `octto` and includes plugin config in `opencode.json`.
+An optional octto runtime config is also seeded at `.opencode/octto.json` (and `/home/opencode/.config/opencode/octto.json` in container).
 
 Then set backend in `pipeline.config.yaml`:
 

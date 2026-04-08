@@ -50,6 +50,7 @@ spec:
             set -e
             mkdir -p /mnt/config
             cp -f /opt/astro-code-seed/config/opencode.json /mnt/config/opencode.json
+            cp -f /opt/astro-code-seed/config/octto.json /mnt/config/octto.json
 {{- if .Values.persistence.workspace.enabled }}
             if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
               mkdir -p /mnt/workspace
@@ -58,6 +59,7 @@ spec:
             mkdir -p /mnt/workspace/runs
             mkdir -p /mnt/workspace/.opencode
             cp -f /opt/astro-code-seed/config/opencode.json /mnt/workspace/.opencode/opencode.json
+            cp -f /opt/astro-code-seed/config/octto.json /mnt/workspace/.opencode/octto.json
             if [ -d /opt/astro-code-seed/workspace/.opencode ]; then
               cp -a /opt/astro-code-seed/workspace/.opencode/. /mnt/workspace/.opencode/
             fi
