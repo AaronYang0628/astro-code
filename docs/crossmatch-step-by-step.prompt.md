@@ -19,7 +19,7 @@ Use this preset to force visible, one-step-at-a-time execution in Web/TUI.
    - 是否进入结果筛选（confirm）
    - 多条件筛选参数填写
 6) 所有决策点必须通过当前交互后端执行（`native|octto|hybrid`，由 `runtime.interaction_backend` 决定）。
-   默认后端为 `hybrid`（优先 octto，失败回退 native）。
+   默认后端为 `native`（仅 OpenCode 原生交互）。
    不允许用纯文本问答替代决策。
    若后端不可用：立即报错并停止，不得静默降级。
 7) 不允许“口头判断不可用”。必须先真实调用一次后端交互再下结论。

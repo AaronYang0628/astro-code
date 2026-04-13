@@ -34,7 +34,6 @@ Or use `direnv` with a local `.envrc` (gitignored) to auto-load `AI_MODEL_KEY`.
 
 ```bash
 npm run run -- --request examples/request.s3.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml
-npm run run -- --request examples/request.file.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml
 ```
 
 ## Runtime outputs

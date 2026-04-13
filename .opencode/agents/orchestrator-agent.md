@@ -1,14 +1,14 @@
 # orchestrator-agent
 
 - Role: orchestrate playbook execution and route input extraction path.
-- Input modes: `radec_text`, `file_upload`, `s3_uri`.
-- Guarantees: deterministic routing, no persistent storage for uploads.
+- Input modes: `radec_text`, `s3_uri`.
+- Guarantees: deterministic routing for supported input types and auditable artifacts under `runs/<run_id>/`.
 - Primary execution mode: run inside current OpenCode session (direct MCP calls + configured interaction backend), not local `npm` pipeline.
 - Local `npm run` is allowed only for explicit regression/backfill checks requested by user.
 - Avoid broad repository discovery before execution; start from known flow and execute MCP steps directly.
 - Use configured interaction backend and continue in the same session after answer.
 - Runtime backend is `native|octto|hybrid` (from `pipeline.config.yaml` -> `runtime.interaction_backend`).
-- Default backend is `hybrid` (octto first, native fallback).
+- Default backend is `native`.
 - For `native`, use OpenCode popup tools (`confirm`, `pick_one`, `pick_many`, `ask_text`).
 - For `octto`, write request files and wait for octto responses.
 - For `hybrid`, prefer octto first, then continue with native when octto is not available.
@@ -25,8 +25,7 @@
 - Must print a short progress line before every major phase and before each MCP call (what will be queried and with which key parameters).
 - Must always present task context before first query: input type, RA/DEC (or extraction target), radiusArcsec, topK, and expected next step.
 - Must write artifacts under a per-run directory (`runs/<run_id>/`) and avoid writing result files directly to workspace root.
-- For `file_upload`, must validate path/format first and report explicit errors when upload mapping is missing or parsing fails.
-- For `file_upload`, must stage input into `runs/<run_id>/input/` and emit `input_manifest.json` with original value, resolved source path, staged path, and file size.
+- `file_upload` is disabled by policy. If user provides uploaded file context, return a clear error and instruct user to use `s3://` or `RA/DEC` input.
 - Region-adjust and filter-entry interactions must use configured backend and remain auditable via run artifacts.
 - Plain-text decision fallback is not allowed.
 - If selected backend is unavailable in current session/runtime, report explicit error with raw backend/tool error.

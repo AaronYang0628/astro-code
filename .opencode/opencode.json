@@ -42,9 +42,9 @@
     }
   },
   "model": "openai/gpt-5.3-codex",
+  "small_model": "openai/gpt-5.3-codex",
   "plugin": [
-    "@opencode-ai/plugin",
-    "octto"
+    
   ],
   "agent": {
     "build": {
@@ -58,14 +58,10 @@
       }
     },
     "orchestrator-agent": {
-      "permission": {
-        "question": "allow"
-      }
+      "permission": "allow"
     },
     "filter-agent": {
-      "permission": {
-        "question": "allow"
-      }
+      "permission": "allow"
     }
   }
 }

@@ -7,6 +7,12 @@
 - 规则补充：`hybrid` 语义固定为“优先 octto，失败再回退 native”。
 - 规则补充：仅当用户意图明确为“执行交叉匹配”时进入分步执行；参数提及本身不等于执行意图。
 
+## 2026-04-09 — 默认交互后端改为 native
+
+- 决策：默认 `runtime.interaction_backend` 从 `hybrid` 调整为 `native`。
+- 原因：当前优先保证交互稳定性，octto 暂不作为默认路径。
+- 约束：保留 `octto|hybrid` 接口与契约文件，不删除相关能力；仅下调默认开关与默认配置。
+
 ## 2026-04-07 — 密钥命名统一为 AI_MODEL_KEY
 
 - 决策：环境变量由 `OPENAI_API_KEY` 改为 `AI_MODEL_KEY`。

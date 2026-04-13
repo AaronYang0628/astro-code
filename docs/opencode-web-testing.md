@@ -14,7 +14,7 @@ Expected:
 
 - MCP includes `euclid-catalog` and `astro_k3s_mcp`
 - interaction backend follows `pipeline.config.yaml` -> `runtime.interaction_backend` (`native|octto|hybrid`)
-- default backend is `hybrid` (octto first, native fallback)
+- default backend is `native` (OpenCode popup)
 - use one chat session end-to-end (do not switch to local `npm run` mid-task)
 
 ## Short Prompt (daily check)

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { extractCoord } from "./coord.js";
@@ -9,7 +8,7 @@ import { resolveHumanFilter } from "./human-gate.js";
 import { createRunDir, ensureDir, writeCsv, writeJson, writeReport } from "./io.js";
 import { queryCatalogMcp, queryDesiMcpWithDetails } from "./mcp.js";
 import { loadPlaybook } from "./playbook.js";
-import type { Playbook, RunRequest } from "./types.js";
+import type { Coord, Playbook, RunRequest } from "./types.js";
 
 interface RunnerOptions {
   configPath: string;
@@ -21,18 +20,18 @@ interface RunnerOptions {
 interface RunArtifacts {
   statusJson: string;
   inputManifestJson: string;
-  euclidQueryCsv: string;
-  desiQueryCsv: string;
-  desiOriginJson: string;
-  desiSearchQueryJson: string;
-  desiSearchInitialRawJson: string;
-  desiSearchSampleRawJson: string;
+  euclidQueryCsv?: string;
+  desiQueryCsv?: string;
+  desiOriginJson?: string;
+  desiSearchQueryJson?: string;
+  desiSearchInitialRawJson?: string;
+  desiSearchSampleRawJson?: string;
   desiSearchRetryRawJson?: string;
   desiSearchRetrySampleRawJson?: string;
-  crossmatchCsv: string;
-  previewCsv: string;
-  previewSummaryJson: string;
-  filteredCsv: string;
+  crossmatchCsv?: string;
+  previewCsv?: string;
+  previewSummaryJson?: string;
+  filteredCsv?: string;
   statsJson: string;
   reportMd: string;
   resultIndexJson: string;
@@ -41,17 +40,18 @@ interface RunArtifacts {
 }
 
 interface RunSummary {
-  raDeg: number;
-  decDeg: number;
-  radiusArcsec: number;
-  topK: number;
-  desiHits: number;
-  crossmatchRows: number;
-  previewRows: number;
-  filteredRows: number;
-  availableFilterFields: string[];
-  previewSample: Record<string, unknown>[];
-  humanGateMode: "filter" | "filter_confirm" | "region_adjust" | "none";
+  mode: "pipeline";
+  raDeg?: number;
+  decDeg?: number;
+  radiusArcsec?: number;
+  topK?: number;
+  desiHits?: number;
+  crossmatchRows?: number;
+  previewRows?: number;
+  filteredRows?: number;
+  availableFilterFields?: string[];
+  previewSample?: Record<string, unknown>[];
+  humanGateMode?: "filter" | "filter_confirm" | "region_adjust" | "none";
   executionMode: "ts_orchestrator";
 }
 
@@ -106,151 +106,13 @@ function validatePlaybook(playbook: Playbook): void {
   }
 }
 
-function collectFiles(rootDir: string, depth: number): string[] {
-  if (depth < 0 || !fs.existsSync(rootDir)) {
-    return [];
-  }
-
-  const out: string[] = [];
-  let entries: fs.Dirent[] = [];
-  try {
-    entries = fs.readdirSync(rootDir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-
-  for (const entry of entries) {
-      const fullPath = path.join(rootDir, entry.name);
-      if (entry.isFile()) {
-        out.push(fullPath);
-        continue;
-      }
-    if (entry.isDirectory()) {
-      out.push(...collectFiles(fullPath, depth - 1));
-    }
-  }
-  return out;
-}
-
-function buildUploadSearchDirs(cwd: string): string[] {
-  const customDirs = (process.env.UPLOAD_SEARCH_DIRS ?? "")
-    .split(":")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-
-  const home = os.homedir();
-  const opencodeBase = path.join(home, ".local", "share", "opencode");
-
-  return [
-    ...customDirs,
-    path.join(opencodeBase, "tool-output"),
-    path.join(opencodeBase, "storage"),
-    "/tmp",
-    path.resolve(cwd, "runs")
-  ];
-}
-
-function latestUploadCandidate(cwd: string): string | undefined {
-  const searchDirs = buildUploadSearchDirs(cwd);
-
-  const allowedExt = new Set([".csv", ".fits", ".fit", ".fts"]);
-  let latest: { file: string; mtimeMs: number } | undefined;
-
-  for (const dir of searchDirs) {
-    for (const file of collectFiles(dir, 3)) {
-      const ext = path.extname(file).toLowerCase();
-      if (!allowedExt.has(ext)) {
-        continue;
-      }
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(file);
-      } catch {
-        continue;
-      }
-      if (!latest || stat.mtimeMs > latest.mtimeMs) {
-        latest = { file, mtimeMs: stat.mtimeMs };
-      }
-    }
-  }
-
-  return latest?.file;
-}
-
-function resolveUploadPath(rawValue: string, cwd: string): string {
-  const value = rawValue.trim();
-  if (!value) {
-    const candidate = latestUploadCandidate(cwd);
-    if (candidate) {
-      return candidate;
-    }
-    throw new Error("File upload path is empty and no CSV/FITS candidate was found in upload cache directories.");
-  }
-
-  const attempts = new Set<string>();
-  const addAttempt = (candidate: string): void => {
-    if (candidate) {
-      attempts.add(candidate);
-    }
-  };
-
-  if (path.isAbsolute(value)) {
-    addAttempt(value);
-  } else {
-    addAttempt(path.resolve(cwd, value));
-  }
-
-  if (value.startsWith("file://")) {
-    try {
-      addAttempt(decodeURIComponent(new URL(value).pathname));
-    } catch {
-      // ignore malformed file:// input and continue with other candidates
-    }
-  }
-
-  const base = path.basename(value);
-  const searchDirs = buildUploadSearchDirs(cwd);
-
-  for (const dir of searchDirs) {
-    addAttempt(path.join(dir, value));
-    addAttempt(path.join(dir, base));
-  }
-
-  for (const candidate of attempts) {
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-      return candidate;
-    }
-  }
-
-  throw new Error(`Uploaded file not found. input.value=${rawValue}; checked=${Array.from(attempts).join(", ")}`);
-}
-
 function writeRunStatus(statusPath: string, status: RunStatus): void {
   status.updated_at = new Date().toISOString();
   writeJson(statusPath, status);
 }
 
-function stageUploadToRunDir(runDir: string, rawValue: string, cwd: string): {
-  originalValue: string;
-  resolvedSourcePath: string;
-  stagedPath: string;
-  bytes: number;
-} {
-  const sourcePath = resolveUploadPath(rawValue, cwd);
-  const inputDir = path.join(runDir, "input");
-  ensureDir(inputDir);
-
-  const safeName = path.basename(sourcePath).replace(/[^A-Za-z0-9._-]/g, "_") || "uploaded_input";
-  const stagedPath = path.join(inputDir, safeName);
-  fs.copyFileSync(sourcePath, stagedPath);
-  const stat = fs.statSync(stagedPath);
-
-  return {
-    originalValue: rawValue,
-    resolvedSourcePath: sourcePath,
-    stagedPath,
-    bytes: stat.size
-  };
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: string; runDir: string; artifacts: RunArtifacts; summary: RunSummary }> {
@@ -302,35 +164,20 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   writeRunStatus(statusJson, runStatus);
 
   try {
-    const stagedUpload = request.input.type === "file_upload"
-      ? stageUploadToRunDir(runDir, request.input.value, process.cwd())
-      : undefined;
-
-  const effectiveRequest: RunRequest = stagedUpload
-    ? {
-      ...request,
-      input: {
-        ...request.input,
-        value: stagedUpload.stagedPath,
-        transient: false
-      }
+    if (request.input.type !== "radec_text" && request.input.type !== "s3_uri") {
+      throw new Error(`Input type ${String(request.input.type)} is disabled by policy. Supported input types: radec_text, s3_uri.`);
     }
-    : request;
 
-  const inputManifestJson = path.join(runDir, "input_manifest.json");
-  writeJson(inputManifestJson, {
-    run_id: runId,
-    request_path: requestPath,
-    input_type: request.input.type,
-    input_original_value: request.input.value,
-    input_effective_value: effectiveRequest.input.value,
-    upload: stagedUpload ?? null
-  });
+    const inputManifestJson = path.join(runDir, "input_manifest.json");
+    const effectiveRequest: RunRequest = request;
 
-  if (stagedUpload) {
-    progress?.(`Upload staged: source=${stagedUpload.resolvedSourcePath}`);
-    progress?.(`Upload staged: target=${stagedUpload.stagedPath}, bytes=${stagedUpload.bytes}`);
-  }
+    writeJson(inputManifestJson, {
+      run_id: runId,
+      request_path: requestPath,
+      input_type: request.input.type,
+      input_original_value: request.input.value,
+      input_effective_value: effectiveRequest.input.value
+    });
 
   runStatus.current_phase = "prepare";
   runStatus.current_step = "resolve_request";
@@ -345,12 +192,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   };
   writeRunStatus(statusJson, runStatus);
 
+  const statsJson = path.join(runDir, "stats.json");
+  const reportMd = path.join(runDir, "report.md");
+  const resultIndexJson = path.join(runDir, "result_index.json");
+
   progress?.("Execution mode: ts_orchestrator (single pipeline for web/cli)");
   progress?.(`Task: input=${effectiveRequest.input.type}, interaction=${interaction}, backend=${config.runtime.interaction_backend}, radiusArcsec=${radiusArcsec}, topK=${topK}, previewRows=${previewRows}`);
   if (effectiveRequest.input.type === "radec_text") {
     progress?.(`Input value (RA/DEC text): ${effectiveRequest.input.value}`);
-  } else if (effectiveRequest.input.type === "file_upload") {
-    progress?.(`Input value (upload path): ${effectiveRequest.input.value}`);
   } else {
     progress?.(`Input value (s3 uri): ${effectiveRequest.input.value}`);
   }
@@ -359,7 +208,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   runStatus.current_phase = "extract_coord";
   runStatus.current_step = "extract_coordinate";
   writeRunStatus(statusJson, runStatus);
-  const coord = await extractCoord(effectiveRequest.input, config.runtime.python_bin);
+  let coord: Coord;
+  try {
+    coord = await extractCoord(effectiveRequest.input, config.runtime.python_bin);
+    progress?.(`Coordinate extraction success: source=${coord.source}, RA=${coord.ra_deg}, DEC=${coord.dec_deg}`);
+  } catch (error) {
+    progress?.(`Coordinate extraction failed: ${errorMessage(error)}`);
+    throw error;
+  }
 
   progress?.(`Matching params: RA=${coord.ra_deg}, DEC=${coord.dec_deg}, radiusArcsec=${radiusArcsec}, topK=${topK}`);
 
@@ -455,10 +311,6 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const previewCsv = path.join(runDir, `preview_${previewRows}.csv`);
   const previewSummaryJson = path.join(runDir, "preview_summary.json");
   const filteredCsv = path.join(runDir, "filtered.csv");
-  const statsJson = path.join(runDir, "stats.json");
-  const reportMd = path.join(runDir, "report.md");
-  const resultIndexJson = path.join(runDir, "result_index.json");
-
   writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
   writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
   writeCsv(crossmatchCsv, crossmatchTruncated as unknown as Record<string, unknown>[]);
@@ -638,6 +490,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   ]);
 
   const summary: RunSummary = {
+    mode: "pipeline",
     raDeg: coord.ra_deg,
     decDeg: coord.dec_deg,
     radiusArcsec,

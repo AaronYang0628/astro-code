@@ -19,7 +19,7 @@ const DEFAULT_CONFIG: AppConfig = {
   runtime: {
     python_bin: "python3",
     strict_playbook_validation: true,
-    interaction_backend: "hybrid"
+    interaction_backend: "native"
   }
 };
 

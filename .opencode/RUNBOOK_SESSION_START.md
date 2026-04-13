@@ -17,7 +17,7 @@
 ## 3) 运行模式确认
 
 - 优先 OpenCode 会话内执行（MCP + 配置化交互后端 native/octto/hybrid）
-- 默认后端为 `hybrid`（优先 octto，失败回退 native）
+- 默认后端为 `native`（仅 OpenCode 原生交互）
 - `npm run` 仅用于本地回归，不与实时会话混用
 
 ## 4) 测试入口建议

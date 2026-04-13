@@ -4,7 +4,7 @@ Multi-agent astronomy workflow project focused on Euclid x DESI MVP flow.
 
 ## MVP scope
 
-- Input: `RA/DEC` text, uploaded `CSV/FITS`, or `s3://bucket/key`
+- Input: `RA/DEC` text or `s3://bucket/key`
 - Extract coordinates through deterministic routing
 - Query Euclid and DESI MCP adapters
 - Normalize Euclid output to stable region fields before DESI query
@@ -18,7 +18,7 @@ Multi-agent astronomy workflow project focused on Euclid x DESI MVP flow.
 - `pipeline.config.yaml`: workflow pipeline runtime config
 - `playbooks/`: workflow playbooks in markdown frontmatter format
 - `src/orchestrator/`: TypeScript orchestration MVP
-- `py/workers/`: Python helpers for CSV/FITS coordinate extraction
+- `py/workers/`: Python helpers used in local data tooling
 - `.opencode/agents|skills|plugins/`: contracts for agentic runtime
 - `runs/`: runtime outputs (`status.json`, `crossmatch.csv`, `preview_100.csv`, `filtered.csv`)
 - `docs/`: architecture and contracts
@@ -75,14 +75,14 @@ Detailed guides:
 
 ## Notes
 
-- Upload staging/search is handled in TS orchestrator (supports home-based OpenCode cache dirs and `UPLOAD_SEARCH_DIRS`).
+- `file_upload` is disabled by policy; use `s3://` or direct `RA/DEC` input.
 - `s3://` inputs are delegated to MCP for permission and retrieval handling.
 - `npm run` pipeline now uses real MCP servers via `src/orchestrator/mcp-client.ts`.
 - OpenCode path uses MCP servers from `.opencode/opencode.json`.
 - OpenCode provider `apiKey` is loaded from environment variable: `AI_MODEL_KEY` (configured as `{env:AI_MODEL_KEY}` in `.opencode/opencode.json`).
 - Put your local key in shell env or `.envrc` (direnv), and never commit keys into git.
 - In k8s Helm deployment, set `opencode.aiModelKey` so pod gets `AI_MODEL_KEY` env via Kubernetes Secret.
-- Interaction backend is configurable via `pipeline.config.yaml` -> `runtime.interaction_backend`:
+- Interaction backend is configurable via `pipeline.config.yaml` -> `runtime.interaction_backend` (default: `native`):
   - `native`: OpenCode popup only
   - `octto`: octto-only interaction
   - `hybrid`: octto first, native fallback
@@ -111,7 +111,7 @@ runtime:
   interaction_backend: octto
 ```
 
-Or use hybrid fallback:
+Or use hybrid fallback when needed:
 
 ```yaml
 runtime:

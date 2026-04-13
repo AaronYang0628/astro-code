@@ -18,13 +18,13 @@
 - 在首次 MCP 调用前，先输出任务说明与关键参数
 - 每个阶段和每次 MCP 调用前输出进度提示
 - 分步执行输出固定格式：`Step / Goal / Action / Result / Next`
-- 上传文件流程先做路径/格式校验，失败要直接报错，不可静默
+- `file_upload` 已禁用；仅允许 `RA/DEC` 与 `s3://` 输入
 - 结果统一写入 `runs/<run_id>/`，禁止落在 workspace 根目录
 
 ## 关键约束
 
 - 交互后端可配置：`native|octto|hybrid`（由 `runtime.interaction_backend` 控制）
-- 默认后端：`hybrid`（优先 octto，失败回退 native）
+- 默认后端：`native`（仅 OpenCode 原生交互）
 - octto 可选配置文件：`.opencode/octto.json`（容器运行时会同步到配置目录）
 - MCP 优先走 Cluster DNS（可保留 hostAliases 作为兜底）
 - 模型密钥与配置解耦：`apiKey` 使用 `{env:AI_MODEL_KEY}`

@@ -53,11 +53,9 @@ Optional (radius 3 arcsec):
 npm run run -- --request examples/request.s3.radius3.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml
 ```
 
-### 3) File upload simulation
+### 3) File upload
 
-```bash
-npm run run -- --request examples/request.file.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml
-```
+`file_upload` is disabled by policy. Use `radec_text` or `s3_uri` requests.
 
 ## Expected output
 

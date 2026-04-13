@@ -3,7 +3,7 @@
   "mcp": {
     "euclid-catalog": {
       "type": "remote",
-      "url": "http://euclid-catalog-mcp.mcp.svc.cluster.local:8000/sse",
+      "url": "https://catalog.euclid.mcp.ay.dev:32443/sse",
       "enabled": true
     },
     "astro_k3s_mcp": {
@@ -42,6 +42,10 @@
     }
   },
   "model": "openai/gpt-5.3-codex",
+  "small_model": "openai/gpt-5.3-codex",
+  "plugin": [
+    
+  ],
   "agent": {
     "build": {
       "options": {
@@ -52,6 +56,12 @@
       "options": {
         "store": false
       }
+    },
+    "orchestrator-agent": {
+      "permission": "allow"
+    },
+    "filter-agent": {
+      "permission": "allow"
     }
   }
 }

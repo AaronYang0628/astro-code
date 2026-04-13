@@ -1,4 +1,4 @@
-export type InputType = "radec_text" | "file_upload" | "s3_uri";
+export type InputType = "radec_text" | "s3_uri";
 export type InteractionMode = "web" | "cli";
 export type InteractionBackend = "native" | "octto" | "hybrid";
 

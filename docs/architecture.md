@@ -13,7 +13,7 @@ This repository implements the MVP for Euclid x DESI crossmatch with a multi-age
 
 ## Runtime flow
 
-1. User submits one input: `RA/DEC`, uploaded file (`CSV/FITS`), or `s3://bucket/key`.
+1. User submits one input: `RA/DEC` or `s3://bucket/key`.
 2. Input is routed deterministically to extractor path.
 3. Euclid and DESI agents query MCP endpoints.
 4. Crossmatch agent computes positional match with configurable radius.

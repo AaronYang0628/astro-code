@@ -144,7 +144,7 @@ opencodeConfig:
 
 runtime:
   pythonBin: "python3"
-  interactionBackend: "hybrid"
+  interactionBackend: "native"
 
 configEnv: {}
 

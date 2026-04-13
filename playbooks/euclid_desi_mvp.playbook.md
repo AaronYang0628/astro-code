@@ -41,8 +41,6 @@ steps:
             catalog_path: "{{s3_path}}"
       - when: "input_source == 'radec_text'"
         use: direct
-      - when: "input_source == 'file_upload'"
-        use: python
 
   - id: euclid-query
     type: mcp_call
@@ -155,7 +153,7 @@ steps:
 
 This playbook keeps the MVP step ids for current runner compatibility and adds explicit MCP details.
 
-1. Parse input source (`s3://`, `RA/DEC`, uploaded file).
+1. Parse input source (`s3://` or `RA/DEC`).
 2. Parse Euclid catalog from MCP with fallback.
 3. Normalize Euclid output into a stable query window.
 4. Query DESI via `astro_k3s_mcp.es_query` in `mode=search`.
