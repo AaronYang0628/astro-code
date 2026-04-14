@@ -47,9 +47,13 @@ async function main(): Promise<void> {
   process.stdout.write(`Run mode: ${result.summary.mode}\n`);
   process.stdout.write(`Matching params: RA=${result.summary.raDeg}, DEC=${result.summary.decDeg}, radiusArcsec=${result.summary.radiusArcsec}, topK=${result.summary.topK}, desiHits=${result.summary.desiHits}\n`);
   process.stdout.write(`Crossmatch rows: ${result.summary.crossmatchRows}\n`);
+  process.stdout.write(`Image pair rows: ${result.summary.imagePairRows}\n`);
   process.stdout.write(`Preview rows: ${result.summary.previewRows}\n`);
   process.stdout.write(`Filtered rows: ${result.summary.filteredRows}\n`);
   process.stdout.write(`Human gate mode: ${result.summary.humanGateMode}\n`);
+  if (result.summary.mockChildRunId) {
+    process.stdout.write(`Mock child run: ${result.summary.mockChildRunId}\n`);
+  }
   process.stdout.write(`Available filter fields: ${(result.summary.availableFilterFields ?? []).join(", ") || "n/a"}\n`);
   if ((result.summary.previewSample ?? []).length > 0) {
     process.stdout.write("Preview sample (markdown table):\n");
@@ -60,6 +64,9 @@ async function main(): Promise<void> {
   process.stdout.write(`Input manifest: ${result.artifacts.inputManifestJson}\n`);
   if (result.artifacts.crossmatchCsv) {
     process.stdout.write(`Crossmatch CSV: ${result.artifacts.crossmatchCsv}\n`);
+  }
+  if (result.artifacts.imagePairIndexCsv) {
+    process.stdout.write(`Image pair index CSV: ${result.artifacts.imagePairIndexCsv}\n`);
   }
   if (result.artifacts.desiOriginJson) {
     process.stdout.write(`DESI origin: ${result.artifacts.desiOriginJson}\n`);

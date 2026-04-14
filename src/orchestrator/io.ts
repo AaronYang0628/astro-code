@@ -17,13 +17,16 @@ export function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
 
-export function writeCsv(filePath: string, rows: Record<string, unknown>[]): void {
-  if (rows.length === 0) {
+export function writeCsv(filePath: string, rows: Record<string, unknown>[], headersOverride?: string[]): void {
+  const headers = headersOverride && headersOverride.length > 0
+    ? headersOverride
+    : (rows.length > 0 ? Object.keys(rows[0]) : []);
+
+  if (headers.length === 0) {
     fs.writeFileSync(filePath, "");
     return;
   }
 
-  const headers = Object.keys(rows[0]);
   const lines: string[] = [headers.join(",")];
 
   for (const row of rows) {

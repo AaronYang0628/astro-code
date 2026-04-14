@@ -18,7 +18,7 @@ interface HumanGateContext {
 
 export interface HumanGateResult {
   filter?: FilterSpec;
-  mode: "filter" | "filter_confirm" | "region_adjust" | "none";
+  mode: "filter" | "filter_confirm" | "region_adjust" | "mock_continue" | "none";
   requestFile?: string;
 }
 
@@ -115,6 +115,34 @@ function parseShouldFilter(response: unknown): boolean | undefined {
   return undefined;
 }
 
+function parseZeroResultAction(response: unknown): "region_adjust" | "mock_continue" | undefined {
+  if (typeof response !== "object" || response === null) {
+    return undefined;
+  }
+
+  const record = response as Record<string, unknown>;
+  const direct = record.action;
+  if (typeof direct === "string") {
+    const v = direct.trim().toLowerCase();
+    if (v === "region_adjust" || v === "mock_continue") {
+      return v;
+    }
+  }
+
+  const selected = record.selected;
+  if (Array.isArray(selected) && selected.length > 0) {
+    const labels = selected.map((item) => String(item).toLowerCase());
+    if (labels.some((label) => label.includes("mock"))) {
+      return "mock_continue";
+    }
+    if (labels.some((label) => label.includes("region") || label.includes("adjust") || label.includes("real"))) {
+      return "region_adjust";
+    }
+  }
+
+  return undefined;
+}
+
 export async function resolveHumanFilter(
   runDir: string,
   interaction: InteractionMode,
@@ -135,11 +163,28 @@ export async function resolveHumanFilter(
 
   if (context.crossmatchRows === 0) {
     const regionRequestPath = path.join(runDir, "region_adjust_request.json");
+    const zeroActionResponsePath = path.join(runDir, "zero_result_action_response.json");
     const regionRequest = {
       title: "No crossmatch results",
       run_id: context.runId,
       interaction_mode: interactionBackend,
       reason: "No matched rows after DESI query and crossmatch",
+      decision: {
+        action_required: true,
+        options: [
+          {
+            id: "region_adjust",
+            label: "Use real-data region adjust",
+            description: "Keep real data only; change region/radius and rerun"
+          },
+          {
+            id: "mock_continue",
+            label: "Use mock data to continue",
+            description: "Development mode: generate mock continuation artifacts"
+          }
+        ],
+        response_file: zeroActionResponsePath
+      },
       status: {
         desi_rows: context.desiRows,
         crossmatch_rows: context.crossmatchRows,
@@ -165,6 +210,17 @@ export async function resolveHumanFilter(
     };
 
     fs.writeFileSync(regionRequestPath, JSON.stringify(regionRequest, null, 2));
+
+    const action = fs.existsSync(zeroActionResponsePath)
+      ? parseZeroResultAction(JSON.parse(fs.readFileSync(zeroActionResponsePath, "utf8")))
+      : undefined;
+
+    if (action === "mock_continue") {
+      return {
+        mode: "mock_continue",
+        requestFile: regionRequestPath
+      };
+    }
 
     return {
       mode: "region_adjust",

@@ -4,7 +4,7 @@
 - Input modes: `radec_text`, `s3_uri`.
 - Guarantees: deterministic routing for supported input types and auditable artifacts under `runs/<run_id>/`.
 - Primary execution mode: run inside current OpenCode session (direct MCP calls + configured interaction backend), not local `npm` pipeline.
-- Local `npm run` is allowed only for explicit regression/backfill checks requested by user.
+- Local `npm run` is allowed for explicit regression/backfill checks, and for user-confirmed zero-hit mock handoff.
 - Avoid broad repository discovery before execution; start from known flow and execute MCP steps directly.
 - Use configured interaction backend and continue in the same session after answer.
 - Runtime backend is `native|octto|hybrid` (from `pipeline.config.yaml` -> `runtime.interaction_backend`).
@@ -26,6 +26,12 @@
 - Must always present task context before first query: input type, RA/DEC (or extraction target), radiusArcsec, topK, and expected next step.
 - Must write artifacts under a per-run directory (`runs/<run_id>/`) and avoid writing result files directly to workspace root.
 - `file_upload` is disabled by policy. If user provides uploaded file context, return a clear error and instruct user to use `s3://` or `RA/DEC` input.
+- For `tile_index`: prefer native Euclid fields (`TILE_INDEX`/`TILEID`), then call `euclid-catalog.resolve_tile_id(ra,dec)` when missing; always keep `tile_index_source` auditable (`euclid.native_field` or `euclid.resolve_tile_id:*` or `pending_ra_dec_to_tile_mapping`).
+- In development mode only, when real DESI rows are zero and `DESI_MOCK_ENABLE=true` (default off), allow deterministic mock DESI rows to unblock downstream pipeline steps; mock rows must be seeded from real DESI MCP fields and only adjust RA/DEC. Must mark outputs as mock-origin in `desi_origin.json`, `stats.json`, `report.md`, and set `path_source=mock`.
+- If real crossmatch rows are zero, must trigger a decision gate with two options: `region_adjust` (real-data retry) or `mock_continue` (development fallback).
+- `mock_continue` is opt-in only: never auto-enable mock unless user explicitly chooses it.
+- If user chooses `mock_continue`, run local pipeline once with mock env (`DESI_MOCK_ENABLE=true`, `DESI_MOCK_MIN_CROSSMATCH_ROWS>=10`) using the same input, then continue subsequent steps from generated artifacts (`crossmatch.csv`, `image_pair_index.csv`) and clearly mark run as mock-derived.
+- For T2 readiness, output must include `image_pair_index.csv` and crossmatch path fields (`euclid_vis_path_pattern`, `desi_tractor_i_path`, `desi_image_*_path`, `path_source`).
 - Region-adjust and filter-entry interactions must use configured backend and remain auditable via run artifacts.
 - Plain-text decision fallback is not allowed.
 - If selected backend is unavailable in current session/runtime, report explicit error with raw backend/tool error.

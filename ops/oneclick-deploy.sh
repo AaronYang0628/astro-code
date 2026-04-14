@@ -74,16 +74,14 @@ deploy_k8s() {
     podman build -f ops/Dockerfile.orchestrator -t "$LOCAL_IMAGE" .
   fi
 
-  HELM_IMAGE_REPO="astro-code/opencode"
+  HELM_IMAGE_REPO="$REGISTRY_IMAGE"
   HELM_IMAGE_TAG="$TAG"
-  HELM_PULL_POLICY="IfNotPresent"
+  HELM_PULL_POLICY="Always"
 
   if [[ "$PUSH_IMAGE" == "1" ]]; then
     echo "[INFO] Tagging + pushing image: ${REMOTE_IMAGE}"
     podman tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
     podman push "$REMOTE_IMAGE"
-    HELM_IMAGE_REPO="$REGISTRY_IMAGE"
-    HELM_PULL_POLICY="Always"
   fi
 
   if [[ "$IMPORT_TO_K3S" == "1" ]]; then
@@ -91,6 +89,13 @@ deploy_k8s() {
     echo "[INFO] Importing image into local k3s: ${LOCAL_IMAGE}"
     podman save -o "$TMP_TAR" "$LOCAL_IMAGE"
     sudo k3s ctr images import "$TMP_TAR"
+    HELM_IMAGE_REPO="astro-code/opencode"
+    HELM_PULL_POLICY="IfNotPresent"
+  fi
+
+  if [[ "$PUSH_IMAGE" == "0" && "$IMPORT_TO_K3S" == "0" ]]; then
+    echo "[WARN] PUSH_IMAGE=0 and IMPORT_TO_K3S=0: deploy will use remote image ${HELM_IMAGE_REPO}:${HELM_IMAGE_TAG}."
+    echo "[WARN] Ensure the tag already exists in registry, otherwise pods may hit ErrImagePull."
   fi
 
   echo "[INFO] Helm upgrade/install: ${RELEASE_NAME} (${NAMESPACE})"

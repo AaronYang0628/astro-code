@@ -161,7 +161,7 @@ spec:
           mountPath: /home/opencode/workspace
 {{- end }}
 {{- if .Values.extraVolumeMounts }}
-{{- toYaml .Values.extraVolumeMounts | nindent 12 }}
+{{- toYaml .Values.extraVolumeMounts | nindent 8 }}
 {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 12 }}
@@ -190,7 +190,7 @@ spec:
           secretName: {{ include "astro-code.opencodeConfigSecretName" . }}
 {{- end }}
 {{- if .Values.extraVolumes }}
-{{- toYaml .Values.extraVolumes | nindent 8 }}
+{{- toYaml .Values.extraVolumes | nindent 6 }}
 {{- end }}
 {{- with .Values.nodeSelector }}
       nodeSelector:

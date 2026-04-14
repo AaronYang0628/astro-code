@@ -18,7 +18,7 @@
     "openai": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "https://v2.qixuw.com/v1",
+        "baseURL": "https://sub2api.home.geekcity.tech:32443/v1",
         "apiKey": "{env:AI_MODEL_KEY}"
       },
       "models": {

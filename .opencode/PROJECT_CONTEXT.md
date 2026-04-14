@@ -19,7 +19,10 @@
 - 每个阶段和每次 MCP 调用前输出进度提示
 - 分步执行输出固定格式：`Step / Goal / Action / Result / Next`
 - `file_upload` 已禁用；仅允许 `RA/DEC` 与 `s3://` 输入
+- `tile_index` 采用多级来源：Euclid 原生字段优先；缺失时调用 `euclid-catalog.resolve_tile_id`；并记录 `tile_index_source`
 - 结果统一写入 `runs/<run_id>/`，禁止落在 workspace 根目录
+- 在 ES 覆盖不重叠阶段允许开发态 `DESI_MOCK_ENABLE=true` 生成可审计 mock 候选（默认关闭）；mock 必须基于真实 DESI seed 字段并标记 `path_source=mock`，仅用于流程联调
+- 执行“完整流程”时必须优先走本地 TS pipeline（`npm run run`）产出标准工件，禁止在会话中手工拼装替代流程
 
 ## 关键约束
 
