@@ -135,12 +135,14 @@ opencodeConfig:
   # modes:
   # - seed: use init container to copy ops/opencode.seed.json into config volume
   # - secret: mount opencode.json from Secret
-  # - external: chart does not mount config; user provides via extraVolumes/extraVolumeMounts
+  # - external: mount opencode.json (+ AI_MODEL_KEY env) from external.secretName
   secret:
     enabled: false
     create: false
     name: ""
     opencodeJson: ""
+  external:
+    secretName: ""
 
 runtime:
   pythonBin: "python3"

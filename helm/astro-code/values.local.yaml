@@ -23,6 +23,8 @@ hostAliases:
 
 opencodeConfig:
   mode: external
+  external:
+    secretName: astro-code-opencode-external
 
 runtime:
   interactionBackend: "native"
@@ -52,16 +54,7 @@ extraEnv:
     value: "0"
 
 extraVolumes:
-  - name: opencode-external-config
-    secret:
-      secretName: astro-code-opencode-external
+  []
 
 extraVolumeMounts:
-  - name: opencode-external-config
-    mountPath: /home/opencode/.config/opencode/opencode.json
-    subPath: opencode.json
-    readOnly: true
-  - name: opencode-external-config
-    mountPath: /home/opencode/workspace/.opencode/opencode.json
-    subPath: opencode.json
-    readOnly: true
+  []

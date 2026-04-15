@@ -136,7 +136,7 @@ Mode switch (`opencodeConfig.mode`):
 
 - `seed` (default): managed by chart init-seed + config PVC
 - `secret`: mount `opencode.json` from Kubernetes Secret
-- `external`: chart does not mount config; user provides config via `extraVolumes`/`extraVolumeMounts`
+- `external`: chart mounts `opencode.json` and `AI_MODEL_KEY` from `opencodeConfig.external.secretName`
 
 ### AI_MODEL_KEY injection in k8s
 
@@ -168,6 +168,7 @@ helm upgrade --install astro-code helm/astro-code \
   --create-namespace \
   -f helm/astro-code/values.local.yaml \
   --set opencodeConfig.mode=external \
+  --set opencodeConfig.external.secretName=astro-code-opencode-external \
   --set persistence.config.enabled=false \
   --set initSeed.enabled=false
 ```

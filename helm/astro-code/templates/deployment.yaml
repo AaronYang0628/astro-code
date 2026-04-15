@@ -39,8 +39,12 @@ spec:
       hostAliases:
         {{- toYaml .Values.hostAliases | nindent 8 }}
 {{- end }}
-{{- if and .Values.initSeed.enabled (eq .Values.opencodeConfig.mode "seed") .Values.persistence.enabled .Values.persistence.config.enabled }}
+{{- $isExternal := eq .Values.opencodeConfig.mode "external" }}
+{{- $needsSeedInit := and .Values.initSeed.enabled (eq .Values.opencodeConfig.mode "seed") .Values.persistence.enabled .Values.persistence.config.enabled }}
+{{- $needsExternalWorkspaceInit := and $isExternal .Values.persistence.workspace.enabled }}
+{{- if or $needsSeedInit $needsExternalWorkspaceInit }}
       initContainers:
+{{- if $needsSeedInit }}
       - name: init-seed
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -76,6 +80,22 @@ spec:
           mountPath: /mnt/workspace
 {{- end }}
 {{- end }}
+{{- if $needsExternalWorkspaceInit }}
+      - name: init-workspace-opencode-dir
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            mkdir -p /mnt/workspace/.opencode
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        volumeMounts:
+        - name: workspace
+          mountPath: /mnt/workspace
+{{- end }}
+{{- end }}
       containers:
       - name: {{ .Chart.Name }}
         securityContext:
@@ -90,21 +110,32 @@ spec:
         envFrom:
         - configMapRef:
             name: {{ include "astro-code.fullname" . }}-config
-{{- if or .Values.extraEnv .Values.opencode.serverPassword .Values.opencode.aiModelKey }}
+{{- $hasBaseSecretEnv := and (not $isExternal) (or .Values.opencode.serverPassword .Values.opencode.aiModelKey) }}
+{{- $hasAnyEnvBlock := or .Values.extraEnv (or $hasBaseSecretEnv $isExternal) }}
+{{- if $hasAnyEnvBlock }}
         env:
-{{- if .Values.opencode.aiModelKey }}
+{{- if and .Values.opencode.aiModelKey (not $isExternal) }}
         - name: AI_MODEL_KEY
           valueFrom:
             secretKeyRef:
               name: {{ include "astro-code.fullname" . }}-secret
               key: AI_MODEL_KEY
 {{- end }}
-{{- if .Values.opencode.serverPassword }}
+{{- if and .Values.opencode.serverPassword (not $isExternal) }}
         - name: OPENCODE_SERVER_PASSWORD
           valueFrom:
             secretKeyRef:
               name: {{ include "astro-code.fullname" . }}-secret
               key: OPENCODE_SERVER_PASSWORD
+{{- end }}
+{{- if $isExternal }}
+{{- $externalSecretName := .Values.opencodeConfig.external.secretName | required "opencodeConfig.external.secretName is required when opencodeConfig.mode=external" }}
+        - name: AI_MODEL_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ $externalSecretName }}
+              key: AI_MODEL_KEY
+              optional: false
 {{- end }}
 {{- range .Values.extraEnv }}
         - name: {{ .name }}
@@ -163,6 +194,19 @@ spec:
 {{- if .Values.extraVolumeMounts }}
 {{- toYaml .Values.extraVolumeMounts | nindent 8 }}
 {{- end }}
+{{- if $isExternal }}
+{{- $externalSecretName := .Values.opencodeConfig.external.secretName | required "opencodeConfig.external.secretName is required when opencodeConfig.mode=external" }}
+        - name: opencode-external-config
+          mountPath: /home/opencode/.config/opencode/opencode.json
+          subPath: opencode.json
+          readOnly: true
+{{- if .Values.persistence.workspace.enabled }}
+        - name: opencode-external-config
+          mountPath: /home/opencode/workspace/.opencode/opencode.json
+          subPath: opencode.json
+          readOnly: true
+{{- end }}
+{{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 12 }}
 {{- if .Values.extraContainers }}
@@ -191,6 +235,12 @@ spec:
 {{- end }}
 {{- if .Values.extraVolumes }}
 {{- toYaml .Values.extraVolumes | nindent 6 }}
+{{- end }}
+{{- if $isExternal }}
+{{- $externalSecretName := .Values.opencodeConfig.external.secretName | required "opencodeConfig.external.secretName is required when opencodeConfig.mode=external" }}
+      - name: opencode-external-config
+        secret:
+          secretName: {{ $externalSecretName }}
 {{- end }}
 {{- with .Values.nodeSelector }}
       nodeSelector:

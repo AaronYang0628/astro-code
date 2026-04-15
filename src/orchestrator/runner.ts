@@ -1003,25 +1003,64 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       `- result_index_json: ${resultIndexJson}`
     ]);
 
+    const handoffArtifacts: RunArtifacts = {
+      statusJson,
+      inputManifestJson,
+      crossmatchCsv: child.crossmatchCsv,
+      imagePairIndexCsv: child.imagePairIndexCsv,
+      previewCsv: childPreviewCsvPath,
+      previewSummaryJson: childPreviewSummaryPath,
+      filteredCsv: childFilteredCsvPath,
+      statsJson,
+      reportMd,
+      resultIndexJson,
+      mockContinueHandoffJson
+    };
+
+    const handoffSummary: RunSummary = {
+      mode: "pipeline",
+      raDeg: coord.ra_deg,
+      decDeg: coord.dec_deg,
+      radiusArcsec,
+      topK,
+      desiHits: childCrossmatchRows,
+      crossmatchRows: childCrossmatchRows,
+      imagePairRows: childCrossmatchRows,
+      previewRows: childPreviewRows,
+      filteredRows: childCrossmatchRows,
+      availableFilterFields: childAvailableFields,
+      previewSample: childPreviewSample,
+      humanGateMode: "mock_continue",
+      executionMode: "ts_orchestrator",
+      mockChildRunId: child.runId
+    };
+
     writeJson(resultIndexJson, {
       run_id: runId,
       output_dir: runDir,
       mode: "mock_continue_handoff",
       child_run_id: child.runId,
       child_run_dir: child.runDir,
+      crossmatch_rows: childCrossmatchRows,
+      image_pair_rows: childCrossmatchRows,
+      preview_rows: childPreviewRows,
+      desi_rows: childCrossmatchRows,
+      zero_result: childCrossmatchRows === 0,
+      available_filter_fields: childAvailableFields,
+      preview_sample: childPreviewSample,
+      human_gate_mode: "mock_continue",
       artifacts: {
-        status_json: statusJson,
-        input_manifest_json: inputManifestJson,
+        ...handoffArtifacts,
+        childResultIndexJson: child.resultIndexJson
+      },
+      handoff_artifacts: {
         mock_continue_handoff_json: mockContinueHandoffJson,
-        stats_json: statsJson,
-        report_md: reportMd,
-        result_index_json: resultIndexJson,
+        child_result_index_json: child.resultIndexJson,
         child_crossmatch_csv: child.crossmatchCsv,
         child_image_pair_index_csv: child.imagePairIndexCsv,
         child_preview_summary_json: childPreviewSummaryPath,
         child_preview_csv: childPreviewCsvPath,
-        child_filtered_csv: childFilteredCsvPath,
-        child_result_index_json: child.resultIndexJson
+        child_filtered_csv: childFilteredCsvPath
       }
     });
 
@@ -1067,36 +1106,8 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     return {
       runId,
       runDir,
-      artifacts: {
-        statusJson,
-        inputManifestJson,
-        crossmatchCsv: child.crossmatchCsv,
-        imagePairIndexCsv: child.imagePairIndexCsv,
-        previewCsv: childPreviewCsvPath,
-        previewSummaryJson: childPreviewSummaryPath,
-        filteredCsv: childFilteredCsvPath,
-        statsJson,
-        reportMd,
-        resultIndexJson,
-        mockContinueHandoffJson
-      },
-      summary: {
-        mode: "pipeline",
-        raDeg: coord.ra_deg,
-        decDeg: coord.dec_deg,
-        radiusArcsec,
-        topK,
-        desiHits: childCrossmatchRows,
-        crossmatchRows: childCrossmatchRows,
-        imagePairRows: childCrossmatchRows,
-        previewRows: childPreviewRows,
-        filteredRows: childCrossmatchRows,
-        availableFilterFields: childAvailableFields,
-        previewSample: childPreviewSample,
-        humanGateMode: "mock_continue",
-        executionMode: "ts_orchestrator",
-        mockChildRunId: child.runId
-      }
+      artifacts: handoffArtifacts,
+      summary: handoffSummary
     };
   }
 
