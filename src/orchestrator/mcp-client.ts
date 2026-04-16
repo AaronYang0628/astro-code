@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 interface McpServerConfig {
@@ -15,6 +14,11 @@ interface OpencodeConfig {
 }
 
 let cachedMcpConfig: Record<string, McpServerConfig> | null = null;
+let mcpCallLogger: ((line: string) => void) | undefined;
+
+export function setMcpCallLogger(logger?: (line: string) => void): void {
+  mcpCallLogger = logger;
+}
 
 function loadMcpConfig(): Record<string, McpServerConfig> {
   if (cachedMcpConfig) {
@@ -79,35 +83,25 @@ async function withMcpClient<T>(serverName: string, fn: (client: Client) => Prom
   }
 
   const url = new URL(server.url);
-  const client = new Client({ name: "astro-code-orchestrator", version: "0.1.0" });
-
-  let connected = false;
-  let lastError: unknown = null;
-
-  const transports = url.pathname.endsWith("/sse")
-    ? [new SSEClientTransport(url), new StreamableHTTPClientTransport(url)]
-    : [new StreamableHTTPClientTransport(url), new SSEClientTransport(url)];
-
-  for (const transport of transports) {
-    try {
-      await client.connect(transport);
-      connected = true;
-      break;
-    } catch (error) {
-      lastError = error;
-    }
+  const mcpUrl = new URL(url.toString());
+  if (mcpUrl.pathname.endsWith("/sse")) {
+    mcpUrl.pathname = mcpUrl.pathname.replace(/\/sse$/, "/mcp");
+  }
+  if (!mcpUrl.pathname.endsWith("/mcp")) {
+    mcpUrl.pathname = mcpUrl.pathname.replace(/\/$/, "") + "/mcp";
   }
 
-  if (!connected) {
-    const message = String(lastError);
+  const client = new Client({ name: "astro-code-orchestrator", version: "0.1.0" });
+  const transport = new StreamableHTTPClientTransport(mcpUrl);
+  try {
+    await client.connect(transport);
+    return await fn(client);
+  } catch (error) {
+    const message = String(error);
     if (message.includes("certificate") || message.includes("self signed")) {
       throw new Error(`${message}. If this is a self-signed cert, run with MCP_INSECURE_TLS=1.`);
     }
     throw new Error(`Failed to connect MCP server ${serverName}: ${message}`);
-  }
-
-  try {
-    return await fn(client);
   } finally {
     await client.close();
   }
@@ -118,8 +112,13 @@ export async function callMcpTool(
   toolName: string,
   input: Record<string, unknown>
 ): Promise<unknown> {
+  const startedAt = Date.now();
+  mcpCallLogger?.(`[mcp] start server=${serverName} tool=${toolName}`);
   return withMcpClient(serverName, async (client) => {
     const raw = await client.callTool({ name: toolName, arguments: input });
-    return parseContentJson(raw);
+    const parsed = parseContentJson(raw);
+    const cost = Date.now() - startedAt;
+    mcpCallLogger?.(`[mcp] done server=${serverName} tool=${toolName} duration_ms=${cost}`);
+    return parsed;
   });
 }

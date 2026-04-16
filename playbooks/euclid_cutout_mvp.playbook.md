@@ -53,20 +53,20 @@ steps:
     action: export_preview
     depends_on: [crossmatch]
 
-  - id: human-filter-gate
+  - id: selection-plan
     type: human_gate
     agent: filter-agent
-    action: request_filter_condition
+    action: request_selection_plan
     depends_on: [preview-export]
 
   - id: filtered-export
     type: export
     agent: reporter-agent
-    action: export_filtered_result
-    depends_on: [human-filter-gate]
+    action: export_selection_result
+    depends_on: [selection-plan]
 ---
 
 # Euclid Single-Catalog Cutout Playbook (Scaffold)
 
 This playbook defines the Euclid-only entry route and keeps the same downstream
-candidate-pool, selection, and filtering flow as the crossmatch pipeline.
+candidate-pool + six-condition selection flow as the crossmatch pipeline.

@@ -1,14 +1,19 @@
 # desi-agent
 
-- Role: query DESI DR10 through ES MCP with real search results.
-- MCP server: `astro_k3s_mcp`
-- MCP tool: `es_query`
-- Query defaults:
-  - `catalog: desi-dr10-tractor`
-  - `mode: search`
-  - `body.from: 0`
-  - `body.size: 100`
-- Raw response path:
-  - total hits: `data.result.hits.total.value`
-  - rows: `data.result.hits.hits`
-- If hits are zero, emit signal for `region-adjust-gate`.
+- Role: provide DESI-side candidate attributes and brick-based image linkage.
+
+## Responsibilities
+
+1. Query DESI DR10 tractor rows for crossmatch workflow.
+2. For single-catalog Euclid flow, compute/derive `brickname` by RA/DEC (`desiutil` worker).
+3. Produce nullable DESI path fields for every candidate row:
+   - `desi_fits_g_path`
+   - `desi_fits_r_path`
+   - `desi_fits_i_path`
+   - `desi_fits_z_path`
+   - `desi_tractor_i_fits_path`
+
+## Notes
+
+- Path columns are mandatory in schema, values may be null.
+- If DESI query is skipped in Euclid-only workflow, paths should still be derived when brickname is available.

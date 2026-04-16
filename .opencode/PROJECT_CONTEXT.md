@@ -1,47 +1,43 @@
 # Project Context
 
-## 项目目标
+## 项目目标（北极星）
 
-本项目是一个基于 OpenCode 的天文数据处理系统，当前主线是 Euclid x DESI 查询/匹配/筛选 MVP。
+本项目是一个天文训练数据流水线：
 
-## 当前主流程（已约定）
+1. 获取 RA/DEC（用户直接输入，或从用户给定 `s3://` 星表 FITS 读取）。
+2. 找到不同望远镜（Euclid / DESI）在该天区的重合图像区域。
+3. 生成统一候选池（`candidate_pool.csv`）。
+4. 执行六条件自由组合筛选（匹配阶段仅一次筛选）。
+5. 后续进行图像裁切，形成训练数据样本组。
 
-1. 输出匹配参数（RA/DEC、半径、窗口、topK、命中数）
-2. 执行交叉匹配
-3. 若未匹配到，进入人机交互参数调整
-4. 若匹配到，输出预览摘要（preview rows、可筛字段、前 10 条样例）
-5. 询问用户是否进入筛选
-6. 用户确认后进行多条件筛选，并输出结果文件
+`file_upload` 当前不支持，不在本阶段范围内。
 
-## 执行可观测性（必须）
+## 输入与路由
 
-- 在首次 MCP 调用前，先输出任务说明与关键参数
-- 每个阶段和每次 MCP 调用前输出进度提示
-- 分步执行输出固定格式：`Step / Goal / Action / Result / Next`
-- `file_upload` 已禁用；仅允许 `RA/DEC` 与 `s3://` 输入
-- `tile_index` 采用多级来源：Euclid 原生字段优先；缺失时调用 `euclid-catalog.resolve_tile_id`；并记录 `tile_index_source`
-- 结果统一写入 `runs/<run_id>/`，禁止落在 workspace 根目录
-- 在 ES 覆盖不重叠阶段允许开发态 `DESI_MOCK_ENABLE=true` 生成可审计 mock 候选（默认关闭）；mock 必须基于真实 DESI seed 字段并标记 `path_source=mock`，仅用于流程联调
-- 执行“完整流程”时必须优先走本地 TS pipeline（`npm run run`）产出标准工件，禁止在会话中手工拼装替代流程
+- 支持输入：`radec_text`、`s3_uri`
+- 默认执行模式：`pipeline_strict`
+- `pipeline_strict` 下，agent 负责对话收集参数，执行统一走 `runMvpPipeline`。
 
-## 关键约束
+## 关键规则
 
-- 交互后端可配置：`native|octto|hybrid`（由 `runtime.interaction_backend` 控制）
-- 默认后端：`native`（仅 OpenCode 原生交互）
-- octto 可选配置文件：`.opencode/octto.json`（容器运行时会同步到配置目录）
-- MCP 优先走 Cluster DNS（可保留 hostAliases 作为兜底）
-- 模型密钥与配置解耦：`apiKey` 使用 `{env:AI_MODEL_KEY}`
-- 结果必须输出明确文件路径与可读预览
+- `tile_id` 必须是纯数字字符串（例如 `102018211`）。
+- 对于 `s3_uri` 输入：优先从路径/文件名截取 `tile_id`。
+- 对于 `RA/DEC` 输入：通过 MCP 解析 `tile_id`。
+- `candidate_pool.csv` 必须包含固定字段名（值可空），尤其：
+  - 星表字段：`type, RIGHT_ASCENSION, DECLINATION, SEMIMAJOR_AXIS, SEGMENTATION_AREA, FLUX_SEGMENTATION, FLUX_VIS_1FWHM_APER, FLUX_VIS_2FWHM_APER, FLUX_VIS_3FWHM_APER, FLUX_VIS_4FWHM_APER`
+  - Euclid 图像路径：`euclid_fits_path`
+  - DESI 图像路径：`desi_fits_g_path, desi_fits_r_path, desi_fits_i_path, desi_fits_z_path, desi_tractor_i_fits_path`
 
-## 当前部署约定
+## 望远镜处理要点
 
-- Helm chart: `helm/astro-code`
-- 本地 values: `helm/astro-code/values.local.yaml`
-- 镜像仓库: `crpi-wixjy6gci86ms14e.cn-hongkong.personal.cr.aliyuncs.com/ay-dev/astro-code`
-- 配置模式: `opencodeConfig.mode` (`seed`/`secret`/`external`)
+- Euclid：
+  - 先定位 `tile_id`
+  - 在 MER 图像中通过 WCS 进行坐标到像素映射（后续 cutout 阶段）
+- DESI：
+  - 无 tile，使用 `brickname`
+  - 通过 `desiutil` 计算或补全砖块定位（后续 cutout 阶段使用）
 
-## 当前已知待办
+## 当前 MVP 范围
 
-- 稳定 MCP 连通性（当前阻塞测试）
-- 筛选交互进一步优化（减少用户操作成本）
-- 预览表格在会话侧稳定展示（持续验收）
+- 先跑通最小 MVP：`candidate_pool + six-condition selection + 标准工件输出`
+- MCP/ES 优化（字段最小化、索引增强）暂缓。

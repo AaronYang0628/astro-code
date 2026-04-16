@@ -40,6 +40,7 @@ export interface SelectionPlan {
 
 export interface RunRequest {
   input: InputSpec;
+  execution_mode?: "pipeline_strict" | "interactive_debug";
   workflow?: "euclid_desi_crossmatch" | "euclid_cutout" | "desi_cutout" | string;
   radiusArcsec?: number;
   topK?: number;
@@ -239,17 +240,14 @@ export interface CrossmatchRecord {
   euclid_flux_vis_psf: number | null;
   euclid_flux_vis_sersic: number | null;
   euclid_vis_path_pattern: string | null;
+  euclid_path_source?: string | null;
   euclid_fits_path?: string | null;
-  desi_tractor_i_path: string | null;
+  desi_tractor_fits_path: string | null;
   desi_tractor_i_fits_path?: string | null;
   desi_image_g_path: string | null;
-  desi_fits_g_path?: string | null;
   desi_image_r_path: string | null;
-  desi_fits_r_path?: string | null;
   desi_image_i_path: string | null;
-  desi_fits_i_path?: string | null;
   desi_image_z_path: string | null;
-  desi_fits_z_path?: string | null;
   path_source: string;
   missing_reasons: string;
 }

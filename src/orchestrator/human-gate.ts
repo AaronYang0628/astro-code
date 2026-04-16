@@ -323,10 +323,10 @@ export async function resolveHumanFilter(
     const regionRequestPath = path.join(runDir, "region_adjust_request.json");
     const zeroActionResponsePath = path.join(runDir, "zero_result_action_response.json");
     const regionRequest = {
-      title: "No crossmatch results",
+      title: "No candidate-pool results",
       run_id: context.runId,
       interaction_mode: interactionBackend,
-      reason: "No matched rows after DESI query and crossmatch",
+      reason: "No candidate rows after query/matching stage",
       decision: {
         action_required: true,
         options: [

@@ -3,12 +3,14 @@ import type { CatalogRecord, Coord } from "./types.js";
 
 const EUCLID_SERVER = "euclid-catalog";
 const ASTRO_SERVER = "astro_k3s_mcp";
+const EUCLID_MER_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/euclid/aws-mirrors/q1/MER";
 
 interface QueryOptions {
   windowScale?: number;
 }
 
 const tileResolveCache = new Map<string, { tile_id?: string; source: string }>();
+const euclidVisFitsPathCache = new Map<string, { path: string; source: "catalog_match" | "fallback_pattern" }>();
 
 interface DesiQueryWindow {
   ra_min: number;
@@ -78,6 +80,181 @@ function getHitsContainer(payload: Record<string, unknown>): Record<string, unkn
   return (result.hits as Record<string, unknown> | undefined) ?? {};
 }
 
+function parsePossiblyNanJson(raw: string): unknown {
+  const text = raw.trim();
+  if (!text) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const sanitized = text
+      .replace(/\b-Infinity\b/g, "null")
+      .replace(/\bInfinity\b/g, "null")
+      .replace(/\bNaN\b/g, "null");
+    try {
+      return JSON.parse(sanitized);
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function unwrapEuclidToolPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const tryUnwrap = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value === "string") {
+      const parsed = parsePossiblyNanJson(value);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return undefined;
+    }
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    return undefined;
+  };
+
+  return tryUnwrap(payload.result)
+    ?? tryUnwrap((payload.data as Record<string, unknown> | undefined)?.result)
+    ?? tryUnwrap(payload.data)
+    ?? payload;
+}
+
+function getEuclidObjects(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const normalized = unwrapEuclidToolPayload(payload);
+  const objects = normalized.objects;
+  if (!Array.isArray(objects)) {
+    return [];
+  }
+  return objects.filter((obj): obj is Record<string, unknown> => typeof obj === "object" && obj !== null);
+}
+
+function getEuclidCatalogEntries(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const normalized = unwrapEuclidToolPayload(payload);
+  const catalogs = normalized.catalogs;
+  if (!Array.isArray(catalogs)) {
+    return [];
+  }
+  return catalogs.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null);
+}
+
+function normalizeS3Path(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  if (trimmed.startsWith("s3://")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("projects/")) {
+    return `s3://data-and-computing/${trimmed}`;
+  }
+  if (trimmed.startsWith("/projects/")) {
+    return `s3://data-and-computing${trimmed}`;
+  }
+  return undefined;
+}
+
+function pickEuclidCatalogEntryByPreference(
+  entries: Record<string, unknown>[],
+  tileId: string
+): Record<string, unknown> | undefined {
+  const tileToken = `TILE${tileId}`;
+  const byName = (entry: Record<string, unknown>): string => String(entry.name ?? entry.path ?? "");
+
+  return entries.find((entry) => byName(entry).includes("BGSUB-MOSAIC-VIS") && byName(entry).includes(tileToken))
+    ?? entries.find((entry) => byName(entry).includes("BGSUB-MOSAIC-VIS"))
+    ?? entries.find((entry) => byName(entry).includes("MOSAIC-VIS"));
+}
+
+async function listEuclidCatalogsByPath(catalogPath: string): Promise<Record<string, unknown>> {
+  return await callMcpTool(EUCLID_SERVER, "list_catalogs", { path: catalogPath }) as Record<string, unknown>;
+}
+
+async function getS3SelectableColumns(catalogPath: string, preferred: string[]): Promise<string[] | undefined> {
+  try {
+    const payload = await callMcpTool(EUCLID_SERVER, "parse_fits_header_only", {
+      catalog_path: catalogPath
+    }) as Record<string, unknown>;
+    const normalized = unwrapEuclidToolPayload(payload);
+    const hdus = Array.isArray(normalized.hdus) ? normalized.hdus as Record<string, unknown>[] : [];
+
+    let selectedHdu: Record<string, unknown> | undefined;
+    for (const hdu of hdus) {
+      if (Number(toNumber(hdu.num_columns ?? 0)) > 0) {
+        selectedHdu = hdu;
+        break;
+      }
+    }
+    if (!selectedHdu) {
+      return undefined;
+    }
+
+    const cols = Array.isArray(selectedHdu.columns) ? selectedHdu.columns as Record<string, unknown>[] : [];
+    const available = new Set(cols
+      .map((col) => (typeof col.name === "string" ? col.name.trim() : ""))
+      .filter((name) => name.length > 0));
+
+    const filtered = preferred.filter((name) => available.has(name));
+    return filtered.length > 0 ? filtered : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function resolveEuclidMerVisFitsPathByTile(
+  tileId: string
+): Promise<{ path: string; source: "catalog_match" | "fallback_pattern" } | null> {
+  const normalizedTile = normalizeTileId(tileId);
+  if (!normalizedTile) {
+    return null;
+  }
+
+  const cached = euclidVisFitsPathCache.get(normalizedTile);
+  if (cached) {
+    return cached;
+  }
+
+  const catalogPath = `${EUCLID_MER_S3_BASE}/${normalizedTile}/VIS/`;
+  try {
+    const payload = await listEuclidCatalogsByPath(catalogPath);
+    const entries = getEuclidCatalogEntries(payload);
+    const picked = pickEuclidCatalogEntryByPreference(entries, normalizedTile);
+
+    if (!picked) {
+      const fallback = `${catalogPath}EUC_MER_BGSUB-MOSAIC-VIS_TILE${normalizedTile}-*.fits`;
+      const resolved = { path: fallback, source: "fallback_pattern" as const };
+      euclidVisFitsPathCache.set(normalizedTile, resolved);
+      return resolved;
+    }
+
+    const normalized = normalizeS3Path(picked.path)
+      ?? normalizeS3Path(picked.uri)
+      ?? normalizeS3Path(picked.s3_path);
+    if (normalized) {
+      const resolved = { path: normalized, source: "catalog_match" as const };
+      euclidVisFitsPathCache.set(normalizedTile, resolved);
+      return resolved;
+    }
+
+    const name = toStringOrUndefined(picked.name);
+    const fallback = name ? `${catalogPath}${name}` : `${catalogPath}EUC_MER_BGSUB-MOSAIC-VIS_TILE${normalizedTile}-*.fits`;
+    const resolved = { path: fallback, source: name ? "catalog_match" as const : "fallback_pattern" as const };
+    euclidVisFitsPathCache.set(normalizedTile, resolved);
+    return resolved;
+  } catch {
+    const fallback = `${catalogPath}EUC_MER_BGSUB-MOSAIC-VIS_TILE${normalizedTile}-*.fits`;
+    const resolved = { path: fallback, source: "fallback_pattern" as const };
+    euclidVisFitsPathCache.set(normalizedTile, resolved);
+    return resolved;
+  }
+}
+
 function getHitRows(payload: Record<string, unknown>): Record<string, unknown>[] {
   const hitsContainer = getHitsContainer(payload);
   const hits = hitsContainer.hits;
@@ -121,6 +298,118 @@ function detectSourcePath(source: Record<string, unknown>): { value: string | nu
   return { value: null, field: null };
 }
 
+function mapDesiRowsFromHitRows(hitRows: Record<string, unknown>[]): CatalogRecord[] {
+  const rows: CatalogRecord[] = [];
+
+  for (const hit of hitRows) {
+    if (typeof hit !== "object" || hit === null) {
+      continue;
+    }
+
+    const hitObj = hit as Record<string, unknown>;
+    const source = (hitObj._source as Record<string, unknown> | undefined) ?? hitObj;
+    const { ra, dec } = pickCoord(source);
+    if (ra === null || dec === null) {
+      continue;
+    }
+
+    rows.push({
+      catalog: "desi",
+      object_id: String(
+        source.OBJECT_ID
+        ?? source.object_id
+        ?? source.TARGETID
+        ?? source.targetid
+        ?? hitObj._id
+        ?? `DESI_${rows.length + 1}`
+      ),
+      obj_id: String(
+        source.OBJECT_ID
+        ?? source.object_id
+        ?? source.TARGETID
+        ?? source.targetid
+        ?? hitObj._id
+        ?? `DESI_${rows.length + 1}`
+      ),
+      ra_deg: ra,
+      dec_deg: dec,
+      mag: firstFinite([
+        source.mag,
+        source.mag_r,
+        source.mag_g,
+        source.mag_z,
+        source.MAG,
+        source.MAG_R,
+        source.MAG_G,
+        source.MAG_Z
+      ]),
+      mag_proxy: fluxToMagNanomaggy(toNumber(source.flux_r ?? source.FLUX_R))
+        ?? fluxToMagNanomaggy(toNumber(source.flux_g ?? source.FLUX_G))
+        ?? firstFinite([
+          source.mag,
+          source.mag_r,
+          source.mag_g,
+          source.mag_z,
+          source.MAG,
+          source.MAG_R,
+          source.MAG_G,
+          source.MAG_Z
+        ]),
+      type: normalizeType(source.type ?? source.TYPE ?? source.objtype),
+      class_label: String(source.type ?? source.TYPE ?? source.objtype ?? "unknown"),
+      brickname: toStringOrUndefined(source.brickname ?? source.BRICKNAME),
+      brickid: toNumber(source.brickid ?? source.BRICKID) ?? undefined,
+      maskbits: toNumber(source.maskbits ?? source.MASKBITS) ?? undefined,
+      seg_area: toNumber(
+        source.segmentation_area
+        ?? source.SEGMENTATION_AREA
+        ?? source.seg_area
+        ?? source.SEG_AREA
+      ) ?? undefined,
+      source_system: "astro_k3s_mcp",
+      source_index: typeof hitObj._index === "string" ? hitObj._index : undefined,
+      source_id: typeof hitObj._id === "string" ? hitObj._id : undefined,
+      source_path: detectSourcePath(source).value ?? undefined,
+      flux_g: toNumber(source.flux_g ?? source.FLUX_G) ?? undefined,
+      flux_r: toNumber(source.flux_r ?? source.FLUX_R) ?? undefined,
+      flux_i: toNumber(source.flux_i ?? source.FLUX_I) ?? undefined,
+      flux_z: toNumber(source.flux_z ?? source.FLUX_Z) ?? undefined,
+      flux_w1: toNumber(source.flux_w1 ?? source.FLUX_W1) ?? undefined,
+      flux_w2: toNumber(source.flux_w2 ?? source.FLUX_W2) ?? undefined,
+      shape_r: toNumber(source.shape_r ?? source.SHAPE_R) ?? undefined,
+      shape_e1: toNumber(source.shape_e1 ?? source.SHAPE_E1) ?? undefined,
+      shape_e2: toNumber(source.shape_e2 ?? source.SHAPE_E2) ?? undefined,
+      sersic: toNumber(source.sersic ?? source.SERSIC) ?? undefined,
+      ref_id: toNumber(source.ref_id ?? source.REF_ID) ?? undefined,
+      release: toNumber(source.release ?? source.RELEASE) ?? undefined,
+      brick_primary: typeof source.brick_primary === "boolean" ? source.brick_primary : undefined,
+      allmask_r: toNumber(source.allmask_r ?? source.ALLMASK_R) ?? undefined,
+      anymask_r: toNumber(source.anymask_r ?? source.ANYMASK_R) ?? undefined,
+      fracmasked_r: toNumber(source.fracmasked_r ?? source.FRACMASKED_R) ?? undefined,
+      fracin_r: toNumber(source.fracin_r ?? source.FRACIN_R) ?? undefined,
+      fracflux_r: toNumber(source.fracflux_r ?? source.FRACFLUX_R) ?? undefined,
+      fiberflux_r: toNumber(source.fiberflux_r ?? source.FIBERFLUX_R) ?? undefined
+    });
+  }
+
+  return rows;
+}
+
+function mapDesiSampleRows(samplePayload: Record<string, unknown>): Array<Record<string, unknown>> {
+  return getHitRows(samplePayload).map((hit) => {
+    const source = ((hit._source as Record<string, unknown> | undefined) ?? hit) as Record<string, unknown>;
+    return {
+      id: String(source.OBJECT_ID ?? source.object_id ?? source.TARGETID ?? source.targetid ?? hit._id ?? "n/a"),
+      ra: firstFinite([source.ra, source.RA], Number.NaN),
+      dec: firstFinite([source.dec, source.DEC], Number.NaN),
+      type: String(source.type ?? source.TYPE ?? source.objtype ?? "unknown"),
+      index: typeof hit._index === "string" ? hit._index : null,
+      doc_id: typeof hit._id === "string" ? hit._id : null,
+      source_path: detectSourcePath(source).value
+    };
+  });
+}
+
 function inferStorageHint(sourcePath: string | null): DesiOrigin["storage_hint"] {
   if (!sourcePath) {
     return "es-index";
@@ -155,6 +444,45 @@ function normalizeTileId(value: unknown): string | undefined {
   }
   const embedded = raw.match(/(\d{6,12})/);
   return embedded?.[1];
+}
+
+function toBase36Digit(ch: string): number | null {
+  const c = ch.charCodeAt(0);
+  if (c >= 48 && c <= 57) {
+    return c - 48;
+  }
+  if (c >= 65 && c <= 90) {
+    return c - 65 + 10;
+  }
+  if (c >= 97 && c <= 122) {
+    return c - 97 + 10;
+  }
+  return null;
+}
+
+function deriveNumericTileId(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+
+  const token = trimmed.replace(/^EUC_TILE_/i, "");
+  let hash = 0n;
+  let used = 0;
+  const mod = 1_000_000_000n;
+  for (const ch of token) {
+    const d = toBase36Digit(ch);
+    if (d === null) {
+      continue;
+    }
+    hash = (hash * 37n + BigInt(d + 1)) % mod;
+    used += 1;
+  }
+
+  if (used === 0) {
+    return undefined;
+  }
+  return hash.toString().padStart(9, "0");
 }
 
 function pickNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
@@ -258,14 +586,19 @@ async function resolveTileIdByCoord(ra: number, dec: number, catalogPath?: strin
   try {
     const payload = await callMcpTool(EUCLID_SERVER, "resolve_tile_id", {
       ra,
-      dec,
-      catalog_path: catalogPath ?? "",
+      dec
     }) as Record<string, unknown>;
 
-    const tile_id = normalizeTileId(payload.tile_id);
     const mapping = (payload.mapping as Record<string, unknown> | undefined) ?? {};
+    const rawTile = toStringOrUndefined(payload.tile_id)
+      ?? toStringOrUndefined(mapping.tile_id)
+      ?? toStringOrUndefined(mapping.tileId);
+    const tile_id_direct = normalizeTileId(rawTile);
+    const tile_id = tile_id_direct ?? (rawTile ? deriveNumericTileId(rawTile) : undefined);
     const method = toStringOrUndefined(mapping.method) ?? "resolve_tile_id";
-    const source = tile_id ? `euclid.resolve_tile_id:${method}` : "pending_ra_dec_to_tile_mapping";
+    const source = tile_id
+      ? `euclid.resolve_tile_id:${method}${tile_id_direct ? "" : ":normalized_non_numeric"}`
+      : "pending_ra_dec_to_tile_mapping";
     const resolved = { tile_id, source };
     tileResolveCache.set(key, resolved);
     return resolved;
@@ -443,16 +776,45 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
       });
     }
 
-    return rows.length > 0 ? rows : buildFallbackEuclidFromCoord(coord);
+    return rows;
   }
 
+  const preferredFields = [
+    "OBJECT_ID",
+    "RIGHT_ASCENSION",
+    "DECLINATION",
+    "TYPE",
+    "TILE_INDEX",
+    "TILEID",
+    "MASKBITS",
+    "SEGMENTATION_AREA",
+    "SEG_AREA",
+    "SEMIMAJOR_AXIS",
+    "FLUX_SEGMENTATION",
+    "FLUX_VIS_1FWHM_APER",
+    "FLUX_VIS_2FWHM_APER",
+    "FLUX_VIS_3FWHM_APER",
+    "FLUX_VIS_4FWHM_APER",
+    "FLUX_VIS_PSF",
+    "FLUX_VIS_SERSIC",
+    "DET_QUALITY_FLAG",
+    "FLAG_VIS",
+    "POINT_LIKE_FLAG",
+    "EXTENDED_FLAG",
+    "MAG_VIS",
+    "MAG_AUTO",
+    "MAG"
+  ];
+
+  const selectableColumns = await getS3SelectableColumns(coord.s3_path, preferredFields) ?? preferredFields;
   const payload = await callMcpTool(EUCLID_SERVER, "get_catalog_objects", {
     catalog_path: coord.s3_path,
     start: 0,
-    limit: topK
+    limit: topK,
+    columns: selectableColumns
   }) as Record<string, unknown>;
 
-  const objects = Array.isArray(payload.objects) ? payload.objects : [];
+  const objects = getEuclidObjects(payload);
   const rows: CatalogRecord[] = [];
 
   for (const obj of objects) {
@@ -518,7 +880,7 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
     });
   }
 
-  return rows.length > 0 ? rows : buildFallbackEuclidFromCoord(coord);
+  return rows;
 }
 
 async function queryDesiRowsWithDetails(
@@ -582,111 +944,8 @@ async function queryDesiRowsWithDetails(
   }) as Record<string, unknown>;
 
   const hitRows = getHitRows(payload);
-
-  const rows: CatalogRecord[] = [];
-  for (const hit of hitRows) {
-    if (typeof hit !== "object" || hit === null) {
-      continue;
-    }
-
-    const hitObj = hit as Record<string, unknown>;
-    const source = (hitObj._source as Record<string, unknown> | undefined) ?? hitObj;
-    const { ra, dec } = pickCoord(source);
-    if (ra === null || dec === null) {
-      continue;
-    }
-
-    rows.push({
-      catalog: "desi",
-      object_id: String(
-        source.OBJECT_ID
-        ?? source.object_id
-        ?? source.TARGETID
-        ?? source.targetid
-        ?? hitObj._id
-        ?? `DESI_${rows.length + 1}`
-      ),
-      obj_id: String(
-        source.OBJECT_ID
-        ?? source.object_id
-        ?? source.TARGETID
-        ?? source.targetid
-        ?? hitObj._id
-        ?? `DESI_${rows.length + 1}`
-      ),
-      ra_deg: ra,
-      dec_deg: dec,
-      mag: firstFinite([
-        source.mag,
-        source.mag_r,
-        source.mag_g,
-        source.mag_z,
-        source.MAG,
-        source.MAG_R,
-        source.MAG_G,
-        source.MAG_Z
-      ]),
-      mag_proxy: fluxToMagNanomaggy(toNumber(source.flux_r ?? source.FLUX_R))
-        ?? fluxToMagNanomaggy(toNumber(source.flux_g ?? source.FLUX_G))
-        ?? firstFinite([
-          source.mag,
-          source.mag_r,
-          source.mag_g,
-          source.mag_z,
-          source.MAG,
-          source.MAG_R,
-          source.MAG_G,
-          source.MAG_Z
-        ]),
-      type: normalizeType(source.type ?? source.TYPE ?? source.objtype),
-      class_label: String(source.type ?? source.TYPE ?? source.objtype ?? "unknown"),
-      brickname: toStringOrUndefined(source.brickname ?? source.BRICKNAME),
-      brickid: toNumber(source.brickid ?? source.BRICKID) ?? undefined,
-      maskbits: toNumber(source.maskbits ?? source.MASKBITS) ?? undefined,
-      seg_area: toNumber(
-        source.segmentation_area
-        ?? source.SEGMENTATION_AREA
-        ?? source.seg_area
-        ?? source.SEG_AREA
-      ) ?? undefined,
-      source_system: "astro_k3s_mcp",
-      source_index: typeof hitObj._index === "string" ? hitObj._index : undefined,
-      source_id: typeof hitObj._id === "string" ? hitObj._id : undefined,
-      source_path: detectSourcePath(source).value ?? undefined,
-      flux_g: toNumber(source.flux_g ?? source.FLUX_G) ?? undefined,
-      flux_r: toNumber(source.flux_r ?? source.FLUX_R) ?? undefined,
-      flux_i: toNumber(source.flux_i ?? source.FLUX_I) ?? undefined,
-      flux_z: toNumber(source.flux_z ?? source.FLUX_Z) ?? undefined,
-      flux_w1: toNumber(source.flux_w1 ?? source.FLUX_W1) ?? undefined,
-      flux_w2: toNumber(source.flux_w2 ?? source.FLUX_W2) ?? undefined,
-      shape_r: toNumber(source.shape_r ?? source.SHAPE_R) ?? undefined,
-      shape_e1: toNumber(source.shape_e1 ?? source.SHAPE_E1) ?? undefined,
-      shape_e2: toNumber(source.shape_e2 ?? source.SHAPE_E2) ?? undefined,
-      sersic: toNumber(source.sersic ?? source.SERSIC) ?? undefined,
-      ref_id: toNumber(source.ref_id ?? source.REF_ID) ?? undefined,
-      release: toNumber(source.release ?? source.RELEASE) ?? undefined,
-      brick_primary: typeof source.brick_primary === "boolean" ? source.brick_primary : undefined,
-      allmask_r: toNumber(source.allmask_r ?? source.ALLMASK_R) ?? undefined,
-      anymask_r: toNumber(source.anymask_r ?? source.ANYMASK_R) ?? undefined,
-      fracmasked_r: toNumber(source.fracmasked_r ?? source.FRACMASKED_R) ?? undefined,
-      fracin_r: toNumber(source.fracin_r ?? source.FRACIN_R) ?? undefined,
-      fracflux_r: toNumber(source.fracflux_r ?? source.FRACFLUX_R) ?? undefined,
-      fiberflux_r: toNumber(source.fiberflux_r ?? source.FIBERFLUX_R) ?? undefined
-    });
-  }
-
-  const sampleRows = getHitRows(samplePayload).map((hit) => {
-    const source = ((hit._source as Record<string, unknown> | undefined) ?? hit) as Record<string, unknown>;
-    return {
-      id: String(source.OBJECT_ID ?? source.object_id ?? source.TARGETID ?? source.targetid ?? hit._id ?? "n/a"),
-      ra: firstFinite([source.ra, source.RA], Number.NaN),
-      dec: firstFinite([source.dec, source.DEC], Number.NaN),
-      type: String(source.type ?? source.TYPE ?? source.objtype ?? "unknown"),
-      index: typeof hit._index === "string" ? hit._index : null,
-      doc_id: typeof hit._id === "string" ? hit._id : null,
-      source_path: detectSourcePath(source).value
-    };
-  });
+  const rows = mapDesiRowsFromHitRows(hitRows);
+  const sampleRows = mapDesiSampleRows(samplePayload);
 
   const firstSource = hitRows.length > 0
     ? (((hitRows[0]._source as Record<string, unknown> | undefined) ?? hitRows[0]) as Record<string, unknown>)
@@ -741,6 +1000,115 @@ export async function queryDesiMcpWithDetails(
   return queryDesiRowsWithDetails(coord, topK, options);
 }
 
+export async function queryDesiByBricknamesWithDetails(
+  bricknames: string[],
+  topK: number
+): Promise<DesiQueryDetails> {
+  const unique = [...new Set(bricknames.map((b) => b.trim()).filter((b) => b.length > 0))];
+  if (unique.length === 0) {
+    return {
+      rows: [],
+      hitsTotal: 0,
+      queryWindow: {
+        ra_min: Number.NaN,
+        ra_max: Number.NaN,
+        dec_min: Number.NaN,
+        dec_max: Number.NaN
+      },
+      queryBody: {},
+      rawPayload: {},
+      samplePayload: {},
+      sampleRows: [],
+      origin: {
+        source_system: "astro_k3s_mcp",
+        catalog: "desi-dr10-tractor",
+        backend_type: "mcp_es_index",
+        storage_hint: "es-index",
+        source_path: null,
+        source_path_field: null,
+        note: "DESI brickname query skipped: empty brickname list"
+      }
+    };
+  }
+
+  const size = Math.min(5000, Math.max(topK, unique.length * 50));
+  const queryBody = {
+    query: {
+      bool: {
+        filter: [
+          { terms: { brickname: unique } },
+          { term: { brick_primary: true } }
+        ]
+      }
+    },
+    from: 0,
+    size
+  };
+
+  const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+    catalog: "desi-dr10-tractor",
+    mode: "search",
+    body: queryBody
+  }) as Record<string, unknown>;
+
+  const sampleBody = {
+    ...queryBody,
+    size: 3,
+    _source: [
+      "OBJECT_ID",
+      "TARGETID",
+      "ra",
+      "dec",
+      "type",
+      "brickname",
+      "brickid",
+      "source_path",
+      "path",
+      "uri",
+      "s3_path"
+    ]
+  };
+
+  const samplePayload = await callMcpTool(ASTRO_SERVER, "es_query", {
+    catalog: "desi-dr10-tractor",
+    mode: "search",
+    body: sampleBody
+  }) as Record<string, unknown>;
+
+  const hitRows = getHitRows(payload);
+  const rows = mapDesiRowsFromHitRows(hitRows);
+  const sampleRows = mapDesiSampleRows(samplePayload);
+
+  const firstSource = hitRows.length > 0
+    ? (((hitRows[0]._source as Record<string, unknown> | undefined) ?? hitRows[0]) as Record<string, unknown>)
+    : {};
+  const sourcePath = detectSourcePath(firstSource);
+
+  return {
+    rows,
+    hitsTotal: getHitsTotal(payload),
+    queryWindow: {
+      ra_min: Number.NaN,
+      ra_max: Number.NaN,
+      dec_min: Number.NaN,
+      dec_max: Number.NaN
+    },
+    queryBody,
+    rawPayload: payload,
+    samplePayload,
+    sampleRows,
+    origin: {
+      source_system: "astro_k3s_mcp",
+      catalog: "desi-dr10-tractor",
+      backend_type: "mcp_es_index",
+      storage_hint: inferStorageHint(sourcePath.value),
+      source_path: sourcePath.value,
+      source_path_field: sourcePath.field,
+      note: `DESI query by brickname terms (count=${unique.length})`
+    }
+  };
+}
+
 export async function queryDesiSeedRowsMcpWithDetails(
   topK: number
 ): Promise<DesiQueryDetails> {
@@ -786,111 +1154,8 @@ export async function queryDesiSeedRowsMcpWithDetails(
   }) as Record<string, unknown>;
 
   const hitRows = getHitRows(payload);
-  const rows: CatalogRecord[] = [];
-
-  for (const hit of hitRows) {
-    if (typeof hit !== "object" || hit === null) {
-      continue;
-    }
-
-    const hitObj = hit as Record<string, unknown>;
-    const source = (hitObj._source as Record<string, unknown> | undefined) ?? hitObj;
-    const { ra, dec } = pickCoord(source);
-    if (ra === null || dec === null) {
-      continue;
-    }
-
-    rows.push({
-      catalog: "desi",
-      object_id: String(
-        source.OBJECT_ID
-        ?? source.object_id
-        ?? source.TARGETID
-        ?? source.targetid
-        ?? hitObj._id
-        ?? `DESI_${rows.length + 1}`
-      ),
-      obj_id: String(
-        source.OBJECT_ID
-        ?? source.object_id
-        ?? source.TARGETID
-        ?? source.targetid
-        ?? hitObj._id
-        ?? `DESI_${rows.length + 1}`
-      ),
-      ra_deg: ra,
-      dec_deg: dec,
-      mag: firstFinite([
-        source.mag,
-        source.mag_r,
-        source.mag_g,
-        source.mag_z,
-        source.MAG,
-        source.MAG_R,
-        source.MAG_G,
-        source.MAG_Z
-      ]),
-      mag_proxy: fluxToMagNanomaggy(toNumber(source.flux_r ?? source.FLUX_R))
-        ?? fluxToMagNanomaggy(toNumber(source.flux_g ?? source.FLUX_G))
-        ?? firstFinite([
-          source.mag,
-          source.mag_r,
-          source.mag_g,
-          source.mag_z,
-          source.MAG,
-          source.MAG_R,
-          source.MAG_G,
-          source.MAG_Z
-        ]),
-      type: normalizeType(source.type ?? source.TYPE ?? source.objtype),
-      class_label: String(source.type ?? source.TYPE ?? source.objtype ?? "unknown"),
-      brickname: toStringOrUndefined(source.brickname ?? source.BRICKNAME),
-      brickid: toNumber(source.brickid ?? source.BRICKID) ?? undefined,
-      maskbits: toNumber(source.maskbits ?? source.MASKBITS) ?? undefined,
-      seg_area: toNumber(
-        source.segmentation_area
-        ?? source.SEGMENTATION_AREA
-        ?? source.seg_area
-        ?? source.SEG_AREA
-      ) ?? undefined,
-      source_system: "astro_k3s_mcp",
-      source_index: typeof hitObj._index === "string" ? hitObj._index : undefined,
-      source_id: typeof hitObj._id === "string" ? hitObj._id : undefined,
-      source_path: detectSourcePath(source).value ?? undefined,
-      flux_g: toNumber(source.flux_g ?? source.FLUX_G) ?? undefined,
-      flux_r: toNumber(source.flux_r ?? source.FLUX_R) ?? undefined,
-      flux_i: toNumber(source.flux_i ?? source.FLUX_I) ?? undefined,
-      flux_z: toNumber(source.flux_z ?? source.FLUX_Z) ?? undefined,
-      flux_w1: toNumber(source.flux_w1 ?? source.FLUX_W1) ?? undefined,
-      flux_w2: toNumber(source.flux_w2 ?? source.FLUX_W2) ?? undefined,
-      shape_r: toNumber(source.shape_r ?? source.SHAPE_R) ?? undefined,
-      shape_e1: toNumber(source.shape_e1 ?? source.SHAPE_E1) ?? undefined,
-      shape_e2: toNumber(source.shape_e2 ?? source.SHAPE_E2) ?? undefined,
-      sersic: toNumber(source.sersic ?? source.SERSIC) ?? undefined,
-      ref_id: toNumber(source.ref_id ?? source.REF_ID) ?? undefined,
-      release: toNumber(source.release ?? source.RELEASE) ?? undefined,
-      brick_primary: typeof source.brick_primary === "boolean" ? source.brick_primary : undefined,
-      allmask_r: toNumber(source.allmask_r ?? source.ALLMASK_R) ?? undefined,
-      anymask_r: toNumber(source.anymask_r ?? source.ANYMASK_R) ?? undefined,
-      fracmasked_r: toNumber(source.fracmasked_r ?? source.FRACMASKED_R) ?? undefined,
-      fracin_r: toNumber(source.fracin_r ?? source.FRACIN_R) ?? undefined,
-      fracflux_r: toNumber(source.fracflux_r ?? source.FRACFLUX_R) ?? undefined,
-      fiberflux_r: toNumber(source.fiberflux_r ?? source.FIBERFLUX_R) ?? undefined
-    });
-  }
-
-  const sampleRows = getHitRows(samplePayload).map((hit) => {
-    const source = ((hit._source as Record<string, unknown> | undefined) ?? hit) as Record<string, unknown>;
-    return {
-      id: String(source.OBJECT_ID ?? source.object_id ?? source.TARGETID ?? source.targetid ?? hit._id ?? "n/a"),
-      ra: firstFinite([source.ra, source.RA], Number.NaN),
-      dec: firstFinite([source.dec, source.DEC], Number.NaN),
-      type: String(source.type ?? source.TYPE ?? source.objtype ?? "unknown"),
-      index: typeof hit._index === "string" ? hit._index : null,
-      doc_id: typeof hit._id === "string" ? hit._id : null,
-      source_path: detectSourcePath(source).value
-    };
-  });
+  const rows = mapDesiRowsFromHitRows(hitRows);
+  const sampleRows = mapDesiSampleRows(samplePayload);
 
   const firstSource = hitRows.length > 0
     ? (((hitRows[0]._source as Record<string, unknown> | undefined) ?? hitRows[0]) as Record<string, unknown>)

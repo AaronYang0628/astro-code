@@ -3,7 +3,7 @@
   "mcp": {
     "euclid-catalog": {
       "type": "remote",
-      "url": "https://catalog.euclid.mcp.ay.dev:32443/sse",
+      "url": "https://catalog.euclid.mcp.ay.dev:32443/mcp",
       "enabled": true
     },
     "astro_k3s_mcp": {

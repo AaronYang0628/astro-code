@@ -9,7 +9,7 @@
 
 ## Region adjust gate
 
-1) Show reason when no matches are found.
+1) Show reason when candidate pool is empty.
 2) Ask user to adjust radius/center with configured backend.
 3) Return structured choice to orchestrator.
 

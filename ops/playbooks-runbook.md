@@ -109,7 +109,7 @@ Adjust the IP to your local k8s node/service ingress IP when needed.
 
 Recommended default for euclid catalog in k8s is Cluster DNS:
 
-`http://euclid-catalog-mcp.mcp.svc.cluster.local:8000/sse`
+`http://euclid-catalog-mcp.mcp.svc.cluster.local:8000/mcp`
 
 Use hostAliases only when you must pin a fake/local domain.
 

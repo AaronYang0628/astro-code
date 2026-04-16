@@ -38,27 +38,6 @@ function candidatePoolRows(summary: RunSummary): number | undefined {
   return summary.candidatePoolRows;
 }
 
-function routePlaybookByIntent(requestText: string): string | undefined {
-  const text = requestText.toLowerCase();
-  const hasS3 = text.includes("s3://");
-  const hasRaDec = /\bra\s*=|\bdec\s*=/.test(text);
-
-  const asksCrossmatch = text.includes("crossmatch") || text.includes("交叉匹配") || text.includes("euclid与desi") || text.includes("euclid and desi");
-  const asksEuclidSingle = text.includes("euclid单星表") || text.includes("euclid single") || text.includes("图像对齐") || text.includes("cutout") || text.includes("space align");
-  const asksDesiSingle = text.includes("desi单星表") || text.includes("desi single");
-
-  if (hasS3 && asksCrossmatch) {
-    return "playbooks/euclid_desi_mvp.playbook.md";
-  }
-  if (hasRaDec && asksEuclidSingle) {
-    return "playbooks/euclid_cutout_mvp.playbook.md";
-  }
-  if (hasRaDec && asksDesiSingle) {
-    return "playbooks/desi_cutout_mvp.playbook.md";
-  }
-  return undefined;
-}
-
 function mapWorkflowToPlaybook(workflow: string): string | undefined {
   const w = workflow.trim().toLowerCase();
   if (w === "euclid_desi_crossmatch") {
@@ -78,20 +57,25 @@ async function main(): Promise<void> {
   const config = loadConfig(path.resolve(configPath));
   const requestPath = argValue("--request") ?? "examples/request.radec.json";
 
-  let intentPlaybook: string | undefined;
+  let workflowPlaybook: string | undefined;
+  let requestWorkflow: string | undefined;
   try {
     const rawRequest = JSON.parse(fs.readFileSync(path.resolve(requestPath), "utf8")) as Record<string, unknown>;
-    const workflow = typeof rawRequest.workflow === "string" ? rawRequest.workflow : "";
-    intentPlaybook = mapWorkflowToPlaybook(workflow) ?? routePlaybookByIntent(JSON.stringify(rawRequest));
+    requestWorkflow = typeof rawRequest.workflow === "string" ? rawRequest.workflow : undefined;
+    workflowPlaybook = requestWorkflow ? mapWorkflowToPlaybook(requestWorkflow) : undefined;
   } catch {
-    intentPlaybook = undefined;
+    workflowPlaybook = undefined;
+    requestWorkflow = undefined;
   }
 
   const playbookPath = argValue("--playbook")
-    ?? intentPlaybook
+    ?? workflowPlaybook
     ?? config.paths.default_playbook;
 
   process.stdout.write(`Playbook selected: ${path.resolve(playbookPath)}\n`);
+  if (requestWorkflow && !workflowPlaybook) {
+    process.stdout.write(`Workflow not mapped, fallback to default playbook: ${requestWorkflow}\n`);
+  }
 
   const result = await runMvpPipeline({
     configPath: path.resolve(configPath),

@@ -1,10 +1,10 @@
 {
-  "workflow": "euclid_desi_crossmatch",
+  "workflow": "euclid_cutout",
   "input": {
     "type": "s3_uri",
     "value": "s3://data-and-computing/projects/CSST/shared-data/euclid/aws-mirrors/q1/catalogs/MER_FINAL_CATALOG/102018211/EUC_MER_FINAL-CAT_TILE102018211-CC66F6_20241018T214045.289017Z_00.00.fits"
   },
-  "radiusArcsec": 2.0,
+  "radiusArcsec": 1.0,
   "topK": 100,
   "previewRows": 100,
   "interaction": "web"

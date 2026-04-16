@@ -6,11 +6,230 @@ import { extractCoord } from "./coord.js";
 import { buildCandidatePoolFromEuclidOnly, crossmatchCatalogs } from "./crossmatch.js";
 import { resolveHumanFilter, resolveSelectionPlan } from "./human-gate.js";
 import { createRunDir, ensureDir, writeCsv, writeJson, writeReport } from "./io.js";
-import { queryCatalogMcp, queryDesiMcpWithDetails, queryDesiSeedRowsMcpWithDetails } from "./mcp.js";
+import { setMcpCallLogger } from "./mcp-client.js";
+import { queryCatalogMcp, queryDesiByBricknamesWithDetails, queryDesiMcpWithDetails, queryDesiSeedRowsMcpWithDetails, resolveEuclidMerVisFitsPathByTile } from "./mcp.js";
 import type { DesiQueryDetails } from "./mcp.js";
 import { loadPlaybook } from "./playbook.js";
 import { applySelectionPlan } from "./selection.js";
-import type { CatalogRecord, Coord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
+import type { CatalogRecord, Coord, CrossmatchRecord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
+
+function toBrickPrefix(brickname: string): string {
+  return brickname.slice(0, 3);
+}
+
+const EUCLID_MER_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/euclid/aws-mirrors/q1/MER";
+const DESI_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south";
+const DESI_TRACTOR_S3_BASE = "s3://data-and-computing/projects/projects/CSST/shared-data/desi/dr10/south";
+
+function buildDesiTractorIPath(brickname: string): string {
+  const p = toBrickPrefix(brickname);
+  return `${DESI_TRACTOR_S3_BASE}/tractor-i/${p}/tractor-i-${brickname}.fits`;
+}
+
+function buildDesiTractorPath(brickname: string): string {
+  const p = toBrickPrefix(brickname);
+  return `${DESI_TRACTOR_S3_BASE}/tractor/${p}/tractor-${brickname}.fits`;
+}
+
+function buildDesiImagePath(brickname: string, band: "g" | "r" | "i" | "z"): string {
+  const p = toBrickPrefix(brickname);
+  return `${DESI_S3_BASE}/coadd/${p}/${brickname}/legacysurvey-${brickname}-image-${band}.fits.fz`;
+}
+
+function enrichEuclidOnlyWithDesiContext(
+  rows: CatalogRecord[],
+  desiRows: CatalogRecord[]
+): CatalogRecord[] {
+  if (rows.length === 0 || desiRows.length === 0) {
+    return rows;
+  }
+
+  const byBrick = new Map<string, CatalogRecord>();
+  for (const row of desiRows) {
+    const brick = row.brickname?.trim();
+    if (brick && !byBrick.has(brick)) {
+      byBrick.set(brick, row);
+    }
+  }
+
+  return rows.map((row) => {
+    const brick = row.brickname?.trim();
+    if (!brick) {
+      return row;
+    }
+    const desi = byBrick.get(brick);
+    if (!desi) {
+      return row;
+    }
+    return {
+      ...row,
+      flux_g: row.flux_g ?? desi.flux_g,
+      flux_r: row.flux_r ?? desi.flux_r,
+      flux_i: row.flux_i ?? desi.flux_i,
+      flux_z: row.flux_z ?? desi.flux_z,
+      flux_w1: row.flux_w1 ?? desi.flux_w1,
+      flux_w2: row.flux_w2 ?? desi.flux_w2,
+      shape_r: row.shape_r ?? desi.shape_r,
+      shape_e1: row.shape_e1 ?? desi.shape_e1,
+      shape_e2: row.shape_e2 ?? desi.shape_e2,
+      sersic: row.sersic ?? desi.sersic,
+      ref_id: row.ref_id ?? desi.ref_id,
+      release: row.release ?? desi.release,
+      brick_primary: row.brick_primary ?? desi.brick_primary,
+      allmask_r: row.allmask_r ?? desi.allmask_r,
+      anymask_r: row.anymask_r ?? desi.anymask_r,
+      fracmasked_r: row.fracmasked_r ?? desi.fracmasked_r,
+      fracin_r: row.fracin_r ?? desi.fracin_r,
+      fracflux_r: row.fracflux_r ?? desi.fracflux_r,
+      fiberflux_r: row.fiberflux_r ?? desi.fiberflux_r,
+      source_path: row.source_path ?? desi.source_path,
+      source_system: row.source_system ?? desi.source_system
+    };
+  });
+}
+
+function isPathLike(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return value.startsWith("s3://") || value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/");
+}
+
+function normalizeEuclidFitsPath(value: string | null | undefined, tileId: string | null): string | null {
+  if (isPathLike(value)) {
+    return value as string;
+  }
+  if (tileId) {
+    return `${EUCLID_MER_S3_BASE}/${tileId}/VIS/EUC_MER_BGSUB-MOSAIC-VIS_TILE${tileId}-*.fits`;
+  }
+  return null;
+}
+
+function normalizeDesiFitsPath(value: string | null | undefined, brickname: string | null, kind: "tractor_i" | "tractor" | "g" | "r" | "i" | "z"): string | null {
+  if (isPathLike(value)) {
+    return value as string;
+  }
+  if (!brickname) {
+    return null;
+  }
+  if (kind === "tractor_i") {
+    return buildDesiTractorIPath(brickname);
+  }
+  if (kind === "tractor") {
+    return buildDesiTractorPath(brickname);
+  }
+  return buildDesiImagePath(brickname, kind);
+}
+
+function normalizeCandidatePaths(rows: CrossmatchRecord[]): CrossmatchRecord[] {
+  return rows.map((row) => {
+    const tileId = typeof row.tile_id === "string" && row.tile_id.trim().length > 0
+      ? row.tile_id
+      : (typeof row.tile_index === "string" && row.tile_index.trim().length > 0 ? row.tile_index : null);
+    const brickname = typeof row.brickname === "string" && row.brickname.trim().length > 0
+      ? row.brickname
+      : null;
+
+    const euclidFits = normalizeEuclidFitsPath(
+      typeof row.euclid_fits_path === "string" ? row.euclid_fits_path : null,
+      tileId
+    );
+
+    const tractorIFits = normalizeDesiFitsPath(
+      typeof row.desi_tractor_i_fits_path === "string" ? row.desi_tractor_i_fits_path : null,
+      brickname,
+      "tractor_i"
+    );
+    const tractor = normalizeDesiFitsPath(
+      typeof row.desi_tractor_fits_path === "string" ? row.desi_tractor_fits_path : null,
+      brickname,
+      "tractor"
+    );
+    const g = normalizeDesiFitsPath(typeof row.desi_image_g_path === "string" ? row.desi_image_g_path : null, brickname, "g");
+    const r = normalizeDesiFitsPath(typeof row.desi_image_r_path === "string" ? row.desi_image_r_path : null, brickname, "r");
+    const i = normalizeDesiFitsPath(typeof row.desi_image_i_path === "string" ? row.desi_image_i_path : null, brickname, "i");
+    const z = normalizeDesiFitsPath(typeof row.desi_image_z_path === "string" ? row.desi_image_z_path : null, brickname, "z");
+
+    return {
+      ...row,
+      euclid_fits_path: euclidFits,
+      euclid_vis_path_pattern: typeof row.euclid_vis_path_pattern === "string" && row.euclid_vis_path_pattern.trim().length > 0
+        ? row.euclid_vis_path_pattern
+        : euclidFits,
+      euclid_path_source: null,
+      desi_tractor_i_fits_path: tractorIFits,
+      desi_tractor_fits_path: tractor,
+      desi_image_g_path: g,
+      desi_image_r_path: r,
+      desi_image_i_path: i,
+      desi_image_z_path: z
+    };
+  });
+}
+
+function appendMissingReason(base: string, reason: string): string {
+  const existing = base
+    .split(";")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && item !== "none");
+  if (!existing.includes(reason)) {
+    existing.push(reason);
+  }
+  return existing.length > 0 ? existing.join(";") : "none";
+}
+
+async function hydrateEuclidFitsPaths(rows: CrossmatchRecord[]): Promise<CrossmatchRecord[]> {
+  const uniqueTileIds = [...new Set(rows
+    .map((row) => {
+      if (typeof row.tile_id === "string" && row.tile_id.trim().length > 0) {
+        return row.tile_id.trim();
+      }
+      if (typeof row.tile_index === "string" && row.tile_index.trim().length > 0) {
+        return row.tile_index.trim();
+      }
+      return null;
+    })
+    .filter((value): value is string => value !== null))];
+
+  if (uniqueTileIds.length === 0) {
+    return rows;
+  }
+
+  const byTile = new Map<string, { path: string; source: "catalog_match" | "fallback_pattern" } | null>();
+  await Promise.all(uniqueTileIds.map(async (tileId) => {
+    const resolved = await resolveEuclidMerVisFitsPathByTile(tileId);
+    byTile.set(tileId, resolved);
+  }));
+
+  return rows.map((row) => {
+    const tileId = typeof row.tile_id === "string" && row.tile_id.trim().length > 0
+      ? row.tile_id.trim()
+      : (typeof row.tile_index === "string" && row.tile_index.trim().length > 0 ? row.tile_index.trim() : null);
+    if (!tileId) {
+      return row;
+    }
+
+    const resolved = byTile.get(tileId);
+    if (!resolved) {
+      return row;
+    }
+
+    const pathSource = resolved.source === "catalog_match"
+      ? "euclid-catalog.list_catalogs:BGSUB-MOSAIC-VIS"
+      : "euclid-catalog.list_catalogs:fallback_pattern";
+    const missingReasons = resolved.source === "fallback_pattern"
+      ? appendMissingReason(row.missing_reasons, "euclid_fits_path_generated_pattern")
+      : row.missing_reasons;
+
+    return {
+      ...row,
+      euclid_fits_path: resolved.path,
+      euclid_vis_path_pattern: resolved.path,
+      euclid_path_source: pathSource,
+      missing_reasons: missingReasons
+    };
+  });
+}
 
 interface RunnerOptions {
   configPath: string;
@@ -41,6 +260,7 @@ interface RunStatus {
   request: {
     input_type: string;
     input_value: string;
+    execution_mode: string;
     interaction: string;
     interaction_backend: string;
     radius_arcsec: number;
@@ -358,6 +578,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   ensureDir(config.paths.runs_dir);
   const { runId, runDir } = createRunDir(config.paths.runs_dir);
   const statusJson = path.join(runDir, "status.json");
+  const mcpCallLogFile = path.join(runDir, "mcp_call_log.txt");
   const progress = options.progress;
 
   const step = (index: number, total: number, message: string): void => {
@@ -367,7 +588,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   progress?.(`Run started: ${runId}`);
   progress?.(`Run dir: ${runDir}`);
 
+  setMcpCallLogger((line) => {
+    const stamped = `${new Date().toISOString()} ${line}`;
+    fs.appendFileSync(mcpCallLogFile, `${stamped}\n`);
+    progress?.(stamped);
+  });
+
   const interaction = request.interaction ?? config.defaults.interaction_primary;
+  const executionMode = request.execution_mode ?? "pipeline_strict";
   const workflow = (request.workflow ?? "").toString().trim().toLowerCase();
   const isEuclidSingleWorkflow = options.playbookPath.includes("euclid_cutout");
   const radiusArcsec = request.radiusArcsec ?? playbook.defaults?.radius_arcsec ?? config.defaults.default_radius_arcsec;
@@ -386,6 +614,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     request: {
       input_type: request.input.type,
       input_value: request.input.value,
+      execution_mode: executionMode,
       interaction,
       interaction_backend: config.runtime.interaction_backend,
       radius_arcsec: radiusArcsec,
@@ -416,6 +645,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   runStatus.request = {
     input_type: effectiveRequest.input.type,
     input_value: effectiveRequest.input.value,
+    execution_mode: executionMode,
     interaction,
     interaction_backend: config.runtime.interaction_backend,
     radius_arcsec: radiusArcsec,
@@ -429,6 +659,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const resultIndexJson = path.join(runDir, "result_index.json");
 
   progress?.("Execution mode: ts_orchestrator (single pipeline for web/cli)");
+  progress?.(`Pipeline mode: ${executionMode}`);
   progress?.(`Task: input=${effectiveRequest.input.type}, interaction=${interaction}, backend=${config.runtime.interaction_backend}, radiusArcsec=${radiusArcsec}, topK=${topK}, previewRows=${previewRows}`);
   if (workflow.length > 0) {
     progress?.(`Workflow: ${workflow}`);
@@ -508,7 +739,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   let desiRetryRawJson: string | undefined;
   let desiRetrySampleRawJson: string | undefined;
 
-  if (!isEuclidSingleWorkflow) {
+  {
     progress?.("MCP call (desi): server=astro_k3s_mcp, tool=es_query, mode=search, catalog=desi-dr10-tractor");
     desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: 1 });
     desiRows = desiDetails.rows;
@@ -551,7 +782,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       progress?.(`DESI sample response (retry,size=3): ${desiRetrySampleRawJson}`);
     }
 
-    if (desiRows.length === 0 && envFlag("DESI_MOCK_ENABLE")) {
+    if (!isEuclidSingleWorkflow && desiRows.length === 0 && envFlag("DESI_MOCK_ENABLE")) {
       progress?.("DESI mock fallback: querying seed rows from ES for realistic fields");
       const seedDetails = await queryDesiSeedRowsMcpWithDetails(topK);
       const minRows = Math.max(10, Math.floor(envNumber("DESI_MOCK_MIN_CROSSMATCH_ROWS", 10)));
@@ -586,35 +817,6 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
         progress?.("DESI mock fallback requested but no DESI seed rows available");
       }
     }
-  } else {
-    writeJson(desiSearchQueryJson, {
-      catalog: "desi-dr10-tractor",
-      mode: "skipped",
-      reason: "euclid_cutout workflow",
-      top_k: topK,
-      query_center: {
-        ra_deg: coord.ra_deg,
-        dec_deg: coord.dec_deg
-      }
-    });
-    writeJson(desiSearchInitialRawJson, {
-      skipped: true,
-      reason: "euclid_cutout workflow"
-    });
-    writeJson(desiSearchSampleRawJson, {
-      skipped: true,
-      reason: "euclid_cutout workflow"
-    });
-    writeJson(desiOriginJson, {
-      source_system: "not_used",
-      catalog: "desi-dr10-tractor",
-      backend_type: "skipped_for_single_catalog_workflow",
-      storage_hint: "unknown",
-      source_path: null,
-      source_path_field: null,
-      note: "DESI query is skipped for euclid_cutout workflow; DESI paths are derived from RA/DEC -> brickname."
-    });
-    progress?.("DESI query skipped for euclid_cutout workflow");
   }
 
   runStatus.metrics = {
@@ -632,7 +834,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     ? resolveDesiBricksForEuclidRows(euclidRows, config.runtime.python_bin, runDir)
     : { byObjectId: {} as Record<string, { brickid?: number | null; brickname?: string | null }>, reportPath: undefined as string | undefined };
 
-  const crossmatched = isEuclidSingleWorkflow
+  let crossmatched = isEuclidSingleWorkflow
     ? buildCandidatePoolFromEuclidOnly(
       euclidRows,
       {
@@ -646,6 +848,48 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       ra_deg: coord.ra_deg,
       dec_deg: coord.dec_deg
     });
+
+  if (isEuclidSingleWorkflow) {
+    const bricknames = [...new Set(crossmatched
+      .map((row) => row.brickname)
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0))];
+    if (bricknames.length > 0) {
+      progress?.(`MCP call (desi by brickname): count=${bricknames.length}`);
+      const desiByBrick = await queryDesiByBricknamesWithDetails(bricknames, topK);
+      desiRows = desiByBrick.rows;
+      desiDetails = desiByBrick;
+      desiRowsInitial = desiRows.length;
+      desiHitsTotalInitial = desiDetails.hitsTotal;
+      writeJson(desiSearchQueryJson, {
+        catalog: "desi-dr10-tractor",
+        mode: "search",
+        strategy: "brickname_terms",
+        bricknames,
+        query_body: desiDetails.queryBody,
+        top_k: topK,
+        query_center: {
+          ra_deg: coord.ra_deg,
+          dec_deg: coord.dec_deg
+        }
+      });
+      writeJson(desiSearchInitialRawJson, desiDetails.rawPayload);
+      writeJson(desiSearchSampleRawJson, desiDetails.samplePayload);
+      writeJson(desiOriginJson, desiDetails.origin);
+      progress?.(`DESI by brickname hits: rows=${desiRows.length}, hits_total=${desiDetails.hitsTotal}`);
+
+      const enrichedEuclidRows = enrichEuclidOnlyWithDesiContext(euclidRows, desiRows);
+      const recrossmatched = buildCandidatePoolFromEuclidOnly(
+        enrichedEuclidRows,
+        {
+          ra_deg: coord.ra_deg,
+          dec_deg: coord.dec_deg
+        },
+        radiusArcsec,
+        { byObjectId: brickResolve.byObjectId }
+      );
+      crossmatched = recrossmatched;
+    }
+  }
   const requiredT1Fields = ["obj_id", "ra", "dec", "tile_index", "brickname", "maskbits", "mag_proxy", "seg_area"] as const;
   const t1MissingCounts: Record<string, number> = {
     obj_id: 0,
@@ -725,50 +969,37 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "# Field Lineage",
     "",
     `- run_id: ${runId}`,
-    "- scope: T1 candidate schema and currently leveraged ES fields",
+    "- scope: current output schema used by candidate_pool / selection / filtered",
     "",
-    "## Required T1 Fields",
+    "## Output Fields (current strict MVP)",
     "",
-    "| output field | source catalog | mcp server/tool | source location | source field | transform | fallback |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-    "| obj_id | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query | `data.result.hits.hits[*]._source` | `OBJECT_ID` \| `object_id` \| `_id` | direct string mapping | fallback to Euclid `OBJECT_ID` |",
-    "| ra | DESI | astro_k3s_mcp.es_query | `..._source` | `ra` | numeric cast | none |",
-    "| dec | DESI | astro_k3s_mcp.es_query | `..._source` | `dec` | numeric cast | none |",
-    "| type | DESI preferred / Euclid optional | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI: `type`; Euclid: `TYPE` (if exists) | normalized string | `null` (single-Euclid keeps unknown as null) |",
-    "| tile_index | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `_source` / objects[] | `TILE_INDEX` \| `tile_index` \| `TILEID` | direct string mapping | `null` + reason `tile_index_missing` |",
-    "| brickname | DESI | astro_k3s_mcp.es_query | `_source` | `brickname` | direct string mapping | `null` + reason `brickname_missing` |",
-    "| maskbits | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI `maskbits`; Euclid `MASKBITS` | numeric cast | `null` + reason `maskbits_missing` |",
-    "| mag_proxy | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI `flux_r`/`mag_*`; Euclid `FLUX_VIS_1FWHM_APER`/`MAG_*` | DESI: `22.5-2.5log10(flux_r)`; Euclid: `23.9-2.5log10(flux_vis_1fwhm_aper)` | `null` + reason `mag_proxy_missing` |",
-    "| seg_area | Euclid preferred / DESI fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | `SEGMENTATION_AREA` \| `seg_area` | numeric cast | `null` + reason `seg_area_missing` |",
+    "| output field | source | rule |",
+    "| --- | --- | --- |",
+    "| obj_id | euclid OBJECT_ID | direct mapping |",
+    "| tile_index | euclid TILE_INDEX/TILEID or s3 filename | numeric tile id extraction |",
+    "| brickname | py/workers/compute_desi_brick.py | desiutil brickname from RA/DEC |",
+    "| type | euclid TYPE (if exists) | missing allowed -> null |",
+    "| RIGHT_ASCENSION | euclid RIGHT_ASCENSION | direct mapping |",
+    "| DECLINATION | euclid DECLINATION | direct mapping |",
+    "| SEMIMAJOR_AXIS | euclid SEMIMAJOR_AXIS | direct mapping |",
+    "| SEGMENTATION_AREA | euclid SEGMENTATION_AREA | direct mapping |",
+    "| FLUX_SEGMENTATION | euclid FLUX_SEGMENTATION | direct mapping |",
+    "| FLUX_VIS_1FWHM_APER..FLUX_VIS_4FWHM_APER | euclid FLUX_VIS_* | direct mapping |",
+    "| euclid_fits_path | euclid-catalog.list_catalogs | prefer BGSUB-MOSAIC-VIS under tile VIS dir |",
+    "| euclid_path_source | derived | `euclid-catalog.list_catalogs:BGSUB-MOSAIC-VIS` or `euclid-catalog.list_catalogs:fallback_pattern` |",
+    "| desi_tractor_i_fits_path | derived from brickname | s3://.../tractor-i/<pre>/tractor-i-<brick>.fits |",
+    "| desi_tractor_fits_path | derived from brickname | s3://.../tractor/<pre>/tractor-<brick>.fits |",
+    "| desi_image_g/r/i/z_path | derived from brickname | s3://.../coadd/<pre>/<brick>/legacysurvey-<brick>-image-<band>.fits.fz |",
+    "| path_source | derived | `derived` (or `mock` when DESI mock is enabled) |",
+    "| missing_reasons | derived | semicolon-joined missing reason tags |",
     "",
-    "## Additional Leveraged Fields (now included in candidate_pool.csv)",
+    "## Fallback Behavior",
     "",
-    "| output field | source catalog | mcp server/tool | source field | note |",
-    "| --- | --- | --- | --- | --- |",
-    "| flux_g/flux_r/flux_i/flux_z/flux_w1/flux_w2 | DESI | astro_k3s_mcp.es_query | `flux_*` | direct from DESI `_source` |",
-    "| shape_r/shape_e1/shape_e2/sersic | DESI | astro_k3s_mcp.es_query | `shape_r`,`shape_e1`,`shape_e2`,`sersic` | morphology/size features |",
-    "| ref_id/release/brick_primary | DESI | astro_k3s_mcp.es_query | `ref_id`,`release`,`brick_primary` | traceability + release split |",
-    "| allmask_r/anymask_r/fracmasked_r/fracin_r/fracflux_r/fiberflux_r | DESI | astro_k3s_mcp.es_query | same names | quality + aperture context |",
-    "| euclid_det_quality_flag/euclid_flag_vis | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `DET_QUALITY_FLAG`,`FLAG_VIS` | Euclid quality flags |",
-    "| euclid_point_like_flag/euclid_extended_flag | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `POINT_LIKE_FLAG`,`EXTENDED_FLAG` | Euclid morphology flags |",
-    "| euclid_semimajor_axis | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `SEMIMAJOR_AXIS` | size proxy |",
-    "| euclid_flux_vis_* | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `FLUX_VIS_1/2/3/4FWHM_APER`,`FLUX_VIS_PSF`,`FLUX_VIS_SERSIC` | photometric proxies |",
-    "| RIGHT_ASCENSION/DECLINATION/SEMIMAJOR_AXIS/SEGMENTATION_AREA/FLUX_SEGMENTATION/FLUX_VIS_1..4FWHM_APER | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | exact uppercase schema fields | copied to candidate_pool when available |",
-    "| tile_index_source | derived | orchestrator | n/a | `euclid.tile_index` or `pending_ra_dec_to_tile_mapping` |",
-    "| mag_proxy_source | derived | orchestrator | n/a | records which upstream field was used |",
-    "| euclid_vis_path_pattern | derived | orchestrator | n/a | IRSA Euclid VIS BGSUB path pattern from `tile_index` |",
-    "| desi_tractor_i_path / desi_image_*_path | derived | orchestrator + py/workers/compute_desi_brick.py | n/a | NERSC DR10 south paths from `brickname` (computed by desiutil.brick when available) |",
-    "| path_source | derived | orchestrator | n/a | `derived` for normal rows, `mock` for DESI_MOCK seeded rows |",
-    "",
-    "## Current Known Gaps",
-    "",
-    "- Euclid `TILE_INDEX` is often missing in current queried rows; kept as nullable with explicit `tile_index_missing` reason.",
-    "- RA/DEC -> tile index mapping is pending dedicated mapping support in euclid-catalog MCP.",
+    "- If euclid-catalog list_catalogs has no BGSUB-MOSAIC-VIS match, euclid_fits_path is generated as TILE pattern with wildcard.",
+    "- In fallback pattern case, `euclid_path_source=euclid-catalog.list_catalogs:fallback_pattern` and `missing_reasons` includes `euclid_fits_path_generated_pattern`.",
     "",
     "## Runtime Evidence Files",
     "",
-    `- DESI raw payload: ${desiSearchInitialRawJson}`,
-    `- DESI sample payload: ${desiSearchSampleRawJson}`,
     `- Euclid rows snapshot: ${euclidQueryCsv}`,
     `- DESI rows snapshot: ${desiQueryCsv}`,
     `- T1 schema report: ${t1SchemaReportJson}`,
@@ -776,24 +1007,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- Brick resolve report: ${brickResolve.reportPath ?? "n/a"}`
   ]);
 
-  const crossmatchTruncated = crossmatched.slice(0, maxResultRows);
+  let crossmatchTruncated = normalizeCandidatePaths(crossmatched.slice(0, maxResultRows));
+  crossmatchTruncated = await hydrateEuclidFitsPaths(crossmatchTruncated);
   const preview = crossmatchTruncated.slice(0, previewRows);
   const previewSample = preview.slice(0, 10) as unknown as Record<string, unknown>[];
-  const availableFilterFields = crossmatchTruncated.length > 0
-    ? Object.keys(crossmatchTruncated[0] as unknown as Record<string, unknown>)
-    : [];
-
-  writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
-  writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
-  writeCsv(candidatePoolCsv, crossmatchTruncated as unknown as Record<string, unknown>[], [
-    "match_rank",
-    "center_ra",
-    "center_dec",
-    "radius_arcsec",
-    "dist_arcsec",
+  const outputColumns = [
     "obj_id",
-    "ra",
-    "dec",
+    "tile_index",
+    "brickname",
     "type",
     "RIGHT_ASCENSION",
     "DECLINATION",
@@ -804,74 +1025,23 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "FLUX_VIS_2FWHM_APER",
     "FLUX_VIS_3FWHM_APER",
     "FLUX_VIS_4FWHM_APER",
-    "tile_id",
-    "tile_index",
-    "brickname",
-    "maskbits",
-    "mag_proxy",
-    "seg_area",
-    "euclid_object_id",
-    "desi_object_id",
-    "euclid_ra",
-    "euclid_dec",
-    "desi_ra",
-    "desi_dec",
-    "brickid",
-    "ra_deg",
-    "dec_deg",
-    "euclid_mag",
-    "desi_mag",
-    "class_label",
-    "source_id",
-    "target_id",
-    "tile_index_source",
-    "mag_proxy_source",
-    "flux_g",
-    "flux_r",
-    "flux_i",
-    "flux_z",
-    "flux_w1",
-    "flux_w2",
-    "shape_r",
-    "shape_e1",
-    "shape_e2",
-    "sersic",
-    "ref_id",
-    "release",
-    "brick_primary",
-    "allmask_r",
-    "anymask_r",
-    "fracmasked_r",
-    "fracin_r",
-    "fracflux_r",
-    "fiberflux_r",
-    "euclid_det_quality_flag",
-    "euclid_flag_vis",
-    "euclid_point_like_flag",
-    "euclid_extended_flag",
-    "euclid_semimajor_axis",
-    "euclid_flux_vis_1fwhm_aper",
-    "euclid_flux_vis_2fwhm_aper",
-    "euclid_flux_vis_3fwhm_aper",
-    "euclid_flux_vis_4fwhm_aper",
-    "euclid_flux_vis_psf",
-    "euclid_flux_vis_sersic",
-    "euclid_fits_path",
-    "euclid_vis_path_pattern",
-    "desi_tractor_i_fits_path",
-    "desi_tractor_i_path",
-    "desi_fits_g_path",
-    "desi_image_g_path",
-    "desi_fits_r_path",
-    "desi_image_r_path",
-    "desi_fits_i_path",
-    "desi_image_i_path",
-    "desi_fits_z_path",
-    "desi_image_z_path",
     "path_source",
-    "missing_reasons"
-  ]);
-  writeCsv(previewCsv, preview as unknown as Record<string, unknown>[]);
+    "missing_reasons",
+    "euclid_path_source",
+    "euclid_fits_path",
+    "desi_tractor_fits_path",
+    "desi_tractor_i_fits_path",
+    "desi_image_g_path",
+    "desi_image_r_path",
+    "desi_image_i_path",
+    "desi_image_z_path"
+  ] as const;
+  const availableFilterFields = [...outputColumns];
+
+  writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
+  writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
+  writeCsv(candidatePoolCsv, crossmatchTruncated as unknown as Record<string, unknown>[], [...outputColumns]);
+  writeCsv(previewCsv, preview as unknown as Record<string, unknown>[], [...outputColumns]);
   writeJson(previewSummaryJson, {
     run_id: runId,
     candidate_pool_rows: crossmatchTruncated.length,
@@ -1180,8 +1350,8 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   );
 
   const selectionResult = applySelectionPlan(crossmatchTruncated, selectionGate.plan);
-  writeCsv(selectionCandidatesCsv, selectionResult.candidate_rows_after_quality as unknown as Record<string, unknown>[]);
-  writeCsv(selectionFinalCsv, selectionResult.selected_rows as unknown as Record<string, unknown>[]);
+  writeCsv(selectionCandidatesCsv, selectionResult.candidate_rows_after_quality as unknown as Record<string, unknown>[], [...outputColumns]);
+  writeCsv(selectionFinalCsv, selectionResult.selected_rows as unknown as Record<string, unknown>[], [...outputColumns]);
   writeJson(selectionReportJson, {
     run_id: runId,
     mode: selectionGate.mode,
@@ -1195,7 +1365,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   });
 
   const filtered = selectionResult.selected_rows;
-  writeCsv(filteredCsv, filtered as unknown as Record<string, unknown>[]);
+  writeCsv(filteredCsv, filtered as unknown as Record<string, unknown>[], [...outputColumns]);
 
   progress?.(`Selection mode: ${selectionGate.mode}`);
   progress?.(`Selection order: ${selectionResult.effective_order.join(" -> ") || "none"}`);
@@ -1422,8 +1592,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   runStatus.state = "completed";
   runStatus.current_phase = "completed";
   runStatus.current_step = "done";
-  runStatus.artifacts = buildArtifactPathMap(artifacts);
-  writeRunStatus(statusJson, runStatus);
+    runStatus.artifacts = {
+      ...buildArtifactPathMap(artifacts),
+      mcp_call_log_txt: mcpCallLogFile
+    };
+    writeRunStatus(statusJson, runStatus);
 
   progress?.(`Artifacts: candidate_pool=${candidatePoolCsv}`);
   progress?.(`Artifacts: status=${statusJson}`);
@@ -1469,5 +1642,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     };
     writeRunStatus(statusJson, runStatus);
     throw error;
+  } finally {
+    setMcpCallLogger(undefined);
   }
 }

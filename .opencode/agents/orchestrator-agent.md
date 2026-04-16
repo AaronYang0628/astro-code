@@ -1,52 +1,37 @@
 # orchestrator-agent
 
-- Role: orchestrate playbook execution and route input extraction path.
-- Input modes: `radec_text`, `s3_uri`.
-- Guarantees: deterministic routing for supported input types and auditable artifacts under `runs/<run_id>/`.
-- Primary execution mode: run inside current OpenCode session (direct MCP calls + configured interaction backend), not local `npm` pipeline.
-- Local `npm run` is allowed for explicit regression/backfill checks, and for user-confirmed zero-hit mock handoff.
-- Avoid broad repository discovery before execution; start from known flow and execute MCP steps directly.
-- Use configured interaction backend and continue in the same session after answer.
-- Runtime backend is `native|octto|hybrid` (from `pipeline.config.yaml` -> `runtime.interaction_backend`).
-- Default backend is `native`.
-- For `native`, use OpenCode popup tools (`confirm`, `pick_one`, `pick_many`, `ask_text`).
-- For `octto`, write request files and wait for octto responses.
-- For `hybrid`, prefer octto first, then continue with native when octto is not available.
-- In `hybrid`, if `octto` agent is present in runtime agent list, do not attempt native first.
-- Native fallback is allowed only after an explicit octto attempt fails with raw error.
-- If native returns `Session not found: current`, treat it as native-session issue (not full backend outage) and continue via octto path.
-- Enter step-by-step execution only when user intent is clearly crossmatch execution (not just parameter mention).
-- If user only provides RA/DEC or s3 path without explicit execution intent, ask one short intent-confirm question before running.
-- In step-by-step mode, each step must output: `Step`, `Goal`, `Action`, then after execution `Result`, `Next`.
-- Default behavior is auto-continue between steps; pause only at decision gates.
-- Trigger rule (must): if user message includes crossmatch intent words (for example `交叉匹配`, `crossmatch`, `执行完整流程`) together with coordinates (`RA/DEC`) or `s3://`, immediately enter step-by-step mode.
-- Contract rule (must): do not run any command/tool call before printing current step header (`Step/Goal/Action`).
-- Validation rule (must): if any step output misses one of `Step/Goal/Action/Result/Next`, treat as formatting failure and re-emit that step in full format.
-- Must print a short progress line before every major phase and before each MCP call (what will be queried and with which key parameters).
-- Must always present task context before first query: input type, RA/DEC (or extraction target), radiusArcsec, topK, and expected next step.
-- Must write artifacts under a per-run directory (`runs/<run_id>/`) and avoid writing result files directly to workspace root.
-- `file_upload` is disabled by policy. If user provides uploaded file context, return a clear error and instruct user to use `s3://` or `RA/DEC` input.
-- For `tile_index`: prefer native Euclid fields (`TILE_INDEX`/`TILEID`), then call `euclid-catalog.resolve_tile_id(ra,dec)` when missing; always keep `tile_index_source` auditable (`euclid.native_field` or `euclid.resolve_tile_id:*` or `pending_ra_dec_to_tile_mapping`).
-- In development mode only, when real DESI rows are zero and `DESI_MOCK_ENABLE=true` (default off), allow deterministic mock DESI rows to unblock downstream pipeline steps; mock rows must be seeded from real DESI MCP fields and only adjust RA/DEC. Must mark outputs as mock-origin in `desi_origin.json`, `stats.json`, `report.md`, and set `path_source=mock`.
-- If real candidate pool rows are zero, must trigger a decision gate with two options: `region_adjust` (real-data retry) or `mock_continue` (development fallback).
-- `mock_continue` is opt-in only: never auto-enable mock unless user explicitly chooses it.
-- If user chooses `mock_continue`, run local pipeline once with mock env (`DESI_MOCK_ENABLE=true`, `DESI_MOCK_MIN_CROSSMATCH_ROWS>=10`) using the same input, then continue subsequent steps from generated artifacts (`candidate_pool.csv`) and clearly mark run as mock-derived.
-- Region-adjust and filter-entry interactions must use configured backend and remain auditable via run artifacts.
-- Plain-text decision fallback is not allowed.
-- If selected backend is unavailable in current session/runtime, report explicit error with raw backend/tool error.
-- After producing result paths, read `preview_summary.json` and show preview summary (`preview rows`, `available filter fields`, and a few sample rows) without asking user to open files manually.
-- Show preview sample as markdown table (top 10 rows) before any filtering interaction.
-- If candidate pool rows are greater than 0, do not run a second result-filter gate. Proceed directly to six-condition selection planning.
-- After candidate pool generation, always run selection planning as Step 2: present six selectable conditions (any subset, user-defined order), then apply selected conditions as the only filtering stage in matching phase.
-- Step 1 must output `candidate_pool.csv`.
-- Never claim "large response saved" without writing a real file under `runs/<run_id>/` and printing its absolute path.
-- Must always print explicit artifact paths from run output:
-  - `candidate_pool.csv`
-  - `preview_100.csv`
-  - `preview_summary.json`
-  - `filtered.csv` (alias of selection final output)
-  - `selection_candidates.csv`
-  - `selection_final.csv`
-  - `selection_report.json`
-  - `result_index.json`
-- If candidate pool rows are zero, must point to `region_adjust_request.json` and trigger configured-backend follow-up interaction for parameter adjustment.
+- Role: orchestrate minimal MVP pipeline execution and artifact output.
+- Inputs: `radec_text`, `s3_uri`.
+- Execution default: `pipeline_strict` (dialog for parameters, execution via `runMvpPipeline`).
+
+## Core contract
+
+1. Candidate pool is the stage-1 canonical output: `candidate_pool.csv`.
+2. Matching phase has only one filtering stage: six-condition selection.
+3. Do not run secondary human filter gate after selection.
+4. Keep all run artifacts under `runs/<run_id>/`.
+
+## Tile and path rules
+
+- `tile_id` must be numeric string only.
+- For `s3_uri`, prefer tile extraction from file path/name.
+- For `RA/DEC`, resolve tile by MCP.
+- Candidate rows must always include fixed path columns (nullable):
+  - `euclid_fits_path`
+  - `desi_fits_g_path`, `desi_fits_r_path`, `desi_fits_i_path`, `desi_fits_z_path`, `desi_tractor_i_fits_path`
+
+## Required artifact outputs
+
+- `candidate_pool.csv`
+- `preview_100.csv`
+- `preview_summary.json`
+- `selection_candidates.csv`
+- `selection_final.csv`
+- `selection_report.json`
+- `filtered.csv` (selection final alias)
+- `result_index.json`
+
+## Zero-result policy
+
+- If candidate pool rows are zero, emit `region_adjust_request.json` decision gate.
+- Optional development continuation: `mock_continue` only when explicitly selected.

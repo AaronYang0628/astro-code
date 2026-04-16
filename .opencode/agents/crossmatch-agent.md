@@ -1,5 +1,11 @@
 # crossmatch-agent
 
-- Role: positional matching across catalog outputs.
-- Parameter: `radius_arcsec` (default `1.0`, user-configurable).
-- Output schema: `euclid_object_id, desi_object_id, separation_arcsec, ...`.
+- Role: build stage-1 `candidate_pool.csv` for both workflows:
+  - Euclid x DESI crossmatch
+  - single-catalog fallback (Euclid-only / DESI-only)
+
+## Output requirements
+
+- Always emit candidate rows with fixed schema columns.
+- Crossmatch mode: nearest-match within radius.
+- Single-catalog mode: preserve source row and fill opposite-side fields as null.

@@ -1,7 +1,7 @@
 ---
 id: euclid_desi_mvp
-version: 0.2.0
-description: Euclid x DESI MCP workflow with Euclid normalization and HITL filtering
+version: 0.3.0
+description: Euclid x DESI minimal MVP pipeline with candidate pool + six-condition selection
 meta:
   mode: configurable_backend
   execution: opencode_session_primary
@@ -136,26 +136,26 @@ steps:
     action: export_preview
     depends_on: [crossmatch]
 
-  - id: human-filter-gate
+  - id: selection-plan
     type: human_gate
     agent: filter-agent
-    action: request_filter_condition
+    action: request_selection_plan
     depends_on: [preview-export]
 
   - id: filtered-export
     type: export
     agent: reporter-agent
-    action: export_filtered_result
-    depends_on: [human-filter-gate]
+    action: export_selection_result
+    depends_on: [selection-plan]
 ---
 
-# Euclid x DESI MCP Playbook
+# Euclid x DESI Minimal MVP Playbook
 
-This playbook keeps the MVP step ids for current runner compatibility and adds explicit MCP details.
+This playbook keeps compatibility with current runner and focuses on minimal MVP:
 
 1. Parse input source (`s3://` or `RA/DEC`).
-2. Parse Euclid catalog from MCP with fallback.
-3. Normalize Euclid output into a stable query window.
-4. Query DESI via `astro_k3s_mcp.es_query` in `mode=search`.
-5. If `hits=0`, emit configured-backend region-adjust request and wait for in-session follow-up.
-6. Export preview, run configured-backend filter confirm + multi-condition collection, then export filtered files.
+2. Query Euclid and DESI data.
+3. Build candidate pool (`candidate_pool.csv`).
+4. If candidate pool is zero, use region-adjust decision gate.
+5. Export preview and run six-condition selection planning.
+6. Export selection outputs and final artifacts.
