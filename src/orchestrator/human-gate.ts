@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { FilterCondition, FilterSpec, InteractionBackend, InteractionMode } from "./types.js";
+import type {
+  InteractionBackend,
+  InteractionMode,
+  SelectionConditionConfig,
+  SelectionConditionId,
+  SelectionPlan
+} from "./types.js";
 
 interface HumanGateContext {
   runId: string;
-  crossmatchRows: number;
+  candidatePoolRows: number;
   desiRows: number;
   retryApplied: boolean;
   retryScale: number;
@@ -16,104 +22,36 @@ interface HumanGateContext {
   };
 }
 
+interface SelectionGateContext {
+  runId: string;
+  candidatePoolRows: number;
+  previewSample: Record<string, unknown>[];
+}
+
 export interface HumanGateResult {
-  filter?: FilterSpec;
-  mode: "filter" | "filter_confirm" | "region_adjust" | "mock_continue" | "none";
+  mode: "region_adjust" | "mock_continue" | "none";
   requestFile?: string;
 }
 
-function normalizeFilter(input: unknown): FilterSpec | undefined {
-  if (typeof input !== "object" || input === null) {
-    return undefined;
-  }
-
-  const record = input as Record<string, unknown>;
-  const maybeConditions = record.conditions;
-  if (Array.isArray(maybeConditions)) {
-    const conditions: FilterCondition[] = [];
-    for (const item of maybeConditions) {
-      if (typeof item !== "object" || item === null) {
-        continue;
-      }
-      const cond = item as Record<string, unknown>;
-      const field = typeof cond.field === "string" ? cond.field : undefined;
-      const op = typeof cond.op === "string" ? cond.op : undefined;
-      const value = cond.value;
-      if (!field || !op || (typeof value !== "string" && typeof value !== "number")) {
-        continue;
-      }
-      conditions.push({
-        field,
-        op: op as FilterCondition["op"],
-        value
-      });
-    }
-
-    if (conditions.length === 0) {
-      return undefined;
-    }
-
-    return {
-      logic: record.logic === "or" ? "or" : "and",
-      conditions
-    };
-  }
-
-  const field = typeof record.field === "string" ? record.field : undefined;
-  const op = typeof record.op === "string" ? record.op : undefined;
-  const value = record.value;
-  if (!field || !op || (typeof value !== "string" && typeof value !== "number")) {
-    return undefined;
-  }
-
-  return {
-    logic: "and",
-    conditions: [{
-      field,
-      op: op as FilterCondition["op"],
-      value
-    }]
-  };
+export interface SelectionGateResult {
+  mode: "selected" | "default";
+  plan: SelectionPlan;
+  requestFile?: string;
+  responseFile?: string;
 }
 
-function parseShouldFilter(response: unknown): boolean | undefined {
-  if (typeof response === "boolean") {
-    return response;
-  }
+const SELECTION_CONDITION_IDS: SelectionConditionId[] = [
+  "galaxy_fraction",
+  "bright_maskbits_filter",
+  "faint_mag_limit",
+  "small_dim_galaxy_filter",
+  "oversized_galaxy_filter",
+  "uniform_mag_sampling"
+];
 
-  if (typeof response !== "object" || response === null) {
-    return undefined;
-  }
-
-  const record = response as Record<string, unknown>;
-
-  if (typeof record.apply_filter === "boolean") {
-    return record.apply_filter;
-  }
-
-  const choice = record.choice;
-  if (typeof choice === "string") {
-    if (choice.toLowerCase() === "yes" || choice.toLowerCase() === "true") {
-      return true;
-    }
-    if (choice.toLowerCase() === "no" || choice.toLowerCase() === "false") {
-      return false;
-    }
-  }
-
-  const selected = record.selected;
-  if (Array.isArray(selected) && selected.length > 0) {
-    const labels = selected.map((item) => String(item).toLowerCase());
-    if (labels.some((label) => label.includes("yes") || label.includes("filter"))) {
-      return true;
-    }
-    if (labels.some((label) => label.includes("no") || label.includes("skip"))) {
-      return false;
-    }
-  }
-
-  return undefined;
-}
+const DEFAULT_SELECTION_PLAN: SelectionPlan = {
+  conditions: []
+};
 
 function parseZeroResultAction(response: unknown): "region_adjust" | "mock_continue" | undefined {
   if (typeof response !== "object" || response === null) {
@@ -143,25 +81,245 @@ function parseZeroResultAction(response: unknown): "region_adjust" | "mock_conti
   return undefined;
 }
 
-export async function resolveHumanFilter(
+function normalizeSelectionConditionId(value: unknown): SelectionConditionId | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const raw = value.trim().toLowerCase();
+  if (SELECTION_CONDITION_IDS.includes(raw as SelectionConditionId)) {
+    return raw as SelectionConditionId;
+  }
+
+  if (raw.includes("fraction") || raw.includes("占比") || raw.includes("数量")) {
+    return "galaxy_fraction";
+  }
+  if (raw.includes("maskbits") || raw.includes("过亮") || raw.includes("bright")) {
+    return "bright_maskbits_filter";
+  }
+  if (raw.includes("过暗") || raw.includes("faint") || raw.includes("mag")) {
+    return "faint_mag_limit";
+  }
+  if (raw.includes("尺寸小") || raw.includes("small") || raw.includes("seg_area")) {
+    return "small_dim_galaxy_filter";
+  }
+  if (raw.includes("过大") || raw.includes("stamp") || raw.includes("oversized")) {
+    return "oversized_galaxy_filter";
+  }
+  if (raw.includes("均匀") || raw.includes("uniform") || raw.includes("sampling")) {
+    return "uniform_mag_sampling";
+  }
+  return undefined;
+}
+
+function parseSelectionPlan(response: unknown): SelectionPlan | undefined {
+  if (typeof response !== "object" || response === null) {
+    return undefined;
+  }
+
+  const record = response as Record<string, unknown>;
+  const out: SelectionConditionConfig[] = [];
+
+  const fromConditions = record.conditions;
+  if (Array.isArray(fromConditions)) {
+    for (const item of fromConditions) {
+      if (typeof item !== "object" || item === null) {
+        continue;
+      }
+      const cond = item as Record<string, unknown>;
+      const id = normalizeSelectionConditionId(cond.id);
+      if (!id) {
+        continue;
+      }
+      out.push({
+        id,
+        params: (typeof cond.params === "object" && cond.params !== null)
+          ? (cond.params as Record<string, unknown>)
+          : {}
+      });
+    }
+  }
+
+  const selected = record.selected;
+  if (Array.isArray(selected) && selected.length > 0) {
+    const paramsMap = (typeof record.params === "object" && record.params !== null)
+      ? (record.params as Record<string, unknown>)
+      : {};
+
+    for (const label of selected) {
+      const id = normalizeSelectionConditionId(label);
+      if (!id) {
+        continue;
+      }
+      const params = paramsMap[id];
+      out.push({
+        id,
+        params: (typeof params === "object" && params !== null)
+          ? (params as Record<string, unknown>)
+          : {}
+      });
+    }
+  }
+
+  if (out.length === 0) {
+    return undefined;
+  }
+
+  const unique: SelectionConditionConfig[] = [];
+  const seen = new Set<string>();
+  for (const cond of out) {
+    if (!seen.has(cond.id)) {
+      seen.add(cond.id);
+      unique.push(cond);
+    }
+  }
+
+  const order = record.order;
+  if (Array.isArray(order) && order.length > 0) {
+    const rank = new Map<SelectionConditionId, number>();
+    let index = 0;
+    for (const item of order) {
+      const id = normalizeSelectionConditionId(item);
+      if (!id || rank.has(id)) {
+        continue;
+      }
+      rank.set(id, index);
+      index += 1;
+    }
+
+    unique.sort((a, b) => {
+      const ra = rank.get(a.id);
+      const rb = rank.get(b.id);
+      if (ra === undefined && rb === undefined) {
+        return 0;
+      }
+      if (ra === undefined) {
+        return 1;
+      }
+      if (rb === undefined) {
+        return -1;
+      }
+      return ra - rb;
+    });
+  }
+
+  return { conditions: unique };
+}
+
+export async function resolveSelectionPlan(
   runDir: string,
   interaction: InteractionMode,
   interactionBackend: InteractionBackend,
-  context: HumanGateContext,
-  inlineFilter?: FilterCondition | FilterSpec
-): Promise<HumanGateResult> {
-  if (inlineFilter) {
+  context: SelectionGateContext,
+  inlineSelection?: SelectionPlan
+): Promise<SelectionGateResult> {
+  if (inlineSelection && Array.isArray(inlineSelection.conditions) && inlineSelection.conditions.length > 0) {
     return {
-      filter: normalizeFilter(inlineFilter),
-      mode: "filter"
+      mode: "selected",
+      plan: inlineSelection
     };
   }
 
   if (interaction !== "web") {
+    return {
+      mode: "default",
+      plan: DEFAULT_SELECTION_PLAN
+    };
+  }
+
+  const requestPath = path.join(runDir, "selection_plan_request.json");
+  const responsePath = path.join(runDir, "selection_plan_response.json");
+
+  const requestBody = {
+    title: "Selection plan (6 conditions, any combination)",
+    run_id: context.runId,
+    interaction_mode: interactionBackend,
+    instruction: "Pick any subset and order of the six conditions. You may select only one. Write response JSON to selection_plan_response.json",
+    response_file: responsePath,
+    notes: [
+      "No fixed execution order is required; user-selected order is honored.",
+      "Condition #1 uses galaxy_fraction + total_samples.",
+      "Condition #6 uniform sampling should normally be used after quality filters."
+    ],
+    options: [
+      {
+        id: "galaxy_fraction",
+        label: "Condition1 galaxy fraction",
+        purpose: "Control star/galaxy ratio and total sample count",
+        default_params: { total_samples: 100, galaxy_fraction: 0.5 }
+      },
+      {
+        id: "bright_maskbits_filter",
+        label: "Condition2 bright-source filter",
+        purpose: "Remove saturated/over-bright sources by maskbits",
+        default_params: { mode: "maskbits_eq_0", threshold: 0 }
+      },
+      {
+        id: "faint_mag_limit",
+        label: "Condition3 faint-limit filter",
+        purpose: "Remove too-faint sources",
+        default_params: { mag_max: 24 }
+      },
+      {
+        id: "small_dim_galaxy_filter",
+        label: "Condition4 small+dim galaxy",
+        purpose: "Drop galaxies that are both too small and too dim",
+        default_params: { seg_area_min: 200, galaxy_mag_max: 24 }
+      },
+      {
+        id: "oversized_galaxy_filter",
+        label: "Condition5 oversized galaxy",
+        purpose: "Drop galaxies larger than stamp coverage",
+        default_params: { stamp_size_px: 160 }
+      },
+      {
+        id: "uniform_mag_sampling",
+        label: "Condition6 uniform mag sampling",
+        purpose: "Uniformly sample by magnitude; star/galaxy independently",
+        default_params: { bins: 8, per_bin_per_class: 2 }
+      }
+    ],
+    response_template: {
+      selected: ["bright_maskbits_filter", "faint_mag_limit", "galaxy_fraction", "uniform_mag_sampling"],
+      order: ["bright_maskbits_filter", "faint_mag_limit", "galaxy_fraction", "uniform_mag_sampling"],
+      params: {
+        galaxy_fraction: { total_samples: 120, galaxy_fraction: 0.5 },
+        faint_mag_limit: { mag_max: 24 },
+        bright_maskbits_filter: { mode: "maskbits_eq_0", threshold: 0 },
+        uniform_mag_sampling: { bins: 8, per_bin_per_class: 2 }
+      }
+    },
+    current_stats: {
+      candidate_pool_rows: context.candidatePoolRows,
+      preview_sample: context.previewSample
+    }
+  };
+
+  fs.writeFileSync(requestPath, JSON.stringify(requestBody, null, 2));
+
+  const parsed = fs.existsSync(responsePath)
+    ? parseSelectionPlan(JSON.parse(fs.readFileSync(responsePath, "utf8")))
+    : undefined;
+
+  return {
+    mode: parsed ? "selected" : "default",
+    plan: parsed ?? DEFAULT_SELECTION_PLAN,
+    requestFile: requestPath,
+    responseFile: fs.existsSync(responsePath) ? responsePath : undefined
+  };
+}
+
+export async function resolveHumanFilter(
+  runDir: string,
+  interaction: InteractionMode,
+  interactionBackend: InteractionBackend,
+  context: HumanGateContext
+): Promise<HumanGateResult> {
+  if (interaction !== "web") {
     return { mode: "none" };
   }
 
-  if (context.crossmatchRows === 0) {
+  if (context.candidatePoolRows === 0) {
     const regionRequestPath = path.join(runDir, "region_adjust_request.json");
     const zeroActionResponsePath = path.join(runDir, "zero_result_action_response.json");
     const regionRequest = {
@@ -187,7 +345,7 @@ export async function resolveHumanFilter(
       },
       status: {
         desi_rows: context.desiRows,
-        crossmatch_rows: context.crossmatchRows,
+        candidate_pool_rows: context.candidatePoolRows,
         retry_applied: context.retryApplied,
         retry_scale: context.retryScale
       },
@@ -228,72 +386,5 @@ export async function resolveHumanFilter(
     };
   }
 
-  const requestPath = path.join(runDir, "human_gate_request.json");
-  const responsePath = path.join(runDir, "human_gate_response.json");
-  const entryRequestPath = path.join(runDir, "filter_entry_request.json");
-  const entryResponsePath = path.join(runDir, "filter_entry_response.json");
-
-  const entryRequest = {
-      title: "Apply result filter?",
-      run_id: context.runId,
-      interaction_mode: interactionBackend,
-      instruction: "Ask user whether to enter filtering stage via configured interaction backend (native/octto/hybrid). For hybrid, prefer octto and fallback to native. Write response to filter_entry_response.json",
-    options: [
-      { id: "yes_filter", label: "Yes, start filtering" },
-      { id: "no_skip", label: "No, keep current result" }
-    ],
-    preview_info: {
-      crossmatch_rows: context.crossmatchRows,
-      available_fields: context.availableFields,
-      preview_sample: context.previewSample
-    }
-  };
-
-  fs.writeFileSync(entryRequestPath, JSON.stringify(entryRequest, null, 2));
-
-  const shouldFilter = fs.existsSync(entryResponsePath)
-    ? parseShouldFilter(JSON.parse(fs.readFileSync(entryResponsePath, "utf8")))
-    : undefined;
-  if (shouldFilter !== true) {
-    return {
-      mode: "none",
-      requestFile: entryRequestPath
-    };
-  }
-
-  const requestBody = {
-      title: "Post-crossmatch filtering",
-      run_id: context.runId,
-      interaction_mode: interactionBackend,
-      instruction: "Use configured interaction backend (native/octto/hybrid) to collect filter logic and multiple conditions, then write JSON to human_gate_response.json. For hybrid, prefer octto and fallback to native.",
-      preferred_ui: interactionBackend === "octto" ? "octto_form_chain" : interactionBackend === "hybrid" ? "octto_then_native" : "native_popup_chain",
-    available_fields: context.availableFields,
-    preview_sample: context.previewSample,
-    format: {
-      logic: "and",
-      conditions: [
-        {
-          field: "desi_mag",
-          op: "<=",
-          value: 20
-        },
-        {
-          field: "separation_arcsec",
-          op: "<=",
-          value: 1.0
-        }
-      ]
-    }
-  };
-
-  fs.writeFileSync(requestPath, JSON.stringify(requestBody, null, 2));
-
-  const filter = fs.existsSync(responsePath)
-    ? normalizeFilter(JSON.parse(fs.readFileSync(responsePath, "utf8")))
-    : undefined;
-  return {
-    filter,
-    mode: filter ? "filter" : "none",
-    requestFile: requestPath
-  };
+  return { mode: "none" };
 }

@@ -1,6 +1,6 @@
 # filter-agent
 
-- Role: collect region-adjust and result-filter input via configured interaction backend.
+- Role: collect region-adjust input via configured interaction backend.
 - Supported backends: `native` (OpenCode popup), `octto` (plugin/form), `hybrid` (octto first, then native).
 - Backend is selected by `runtime.interaction_backend`.
 - Default backend is `native`.
@@ -13,18 +13,7 @@
 2) Ask user to adjust radius/center with configured backend.
 3) Return structured choice to orchestrator.
 
-## Result filter gate
+## Six-condition selection
 
-1) Ask whether to enter filtering.
-2) If yes, collect `logic` and `conditions[]` through configured backend chain.
-3) Return structured filter object:
-
-```json
-{
-  "logic": "and",
-  "conditions": [
-    {"field": "separation_arcsec", "op": "<=", "value": 220},
-    {"field": "class_label", "op": "contains", "value": "327"}
-  ]
-}
-```
+1) Selection is handled by `selection_plan_request.json` / `selection_plan_response.json`.
+2) This agent should not collect a second filter stage after six-condition selection.

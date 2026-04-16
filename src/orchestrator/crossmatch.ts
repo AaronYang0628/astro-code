@@ -44,6 +44,14 @@ function toBrickPrefix(brickname: string): string {
   return brickname.slice(0, 3);
 }
 
+function normalizeTileId(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return /^\d{6,12}$/.test(trimmed) ? trimmed : null;
+}
+
 function buildEuclidVisPathPattern(tileIndex: string): string {
   return `https://irsa.ipac.caltech.edu/ibe/data/euclid/q1/MER/${tileIndex}/VIS/EUC_MER_BGSUB-MOSAIC-VIS_TILE${tileIndex}-*.fits`;
 }
@@ -56,6 +64,144 @@ function buildDesiTractorIPath(brickname: string): string {
 function buildDesiImagePath(brickname: string, band: "g" | "r" | "i" | "z"): string {
   const p = toBrickPrefix(brickname);
   return `https://portal.nersc.gov/cfs/cosmo/data/legacysurvey/dr10/south/coadd/${p}/${brickname}/legacysurvey-${brickname}-image-${band}.fits.fz`;
+}
+
+function appendMissing(base: string, missing: string[]): string {
+  if (missing.length === 0) {
+    return base === "none" ? "none" : base;
+  }
+  if (base === "none") {
+    return missing.join(";");
+  }
+  return `${base};${missing.join(";")}`;
+}
+
+export function buildCandidatePoolFromEuclidOnly(
+  euclidRows: CatalogRecord[],
+  center: { ra_deg: number; dec_deg: number },
+  radiusArcsec: number,
+  enrichments?: {
+    byObjectId?: Record<string, {
+      brickname?: string | null;
+      brickid?: number | null;
+    }>;
+  }
+): CrossmatchRecord[] {
+  const rows: CrossmatchRecord[] = [];
+
+  for (let idx = 0; idx < euclidRows.length; idx += 1) {
+    const e = euclidRows[idx];
+    const objId = e.obj_id ?? e.object_id;
+    const tileIndex = normalizeTileId(e.tile_index ?? null);
+    const enrich = enrichments?.byObjectId?.[e.object_id] ?? enrichments?.byObjectId?.[objId];
+    const brickname = enrich?.brickname ?? null;
+    const brickid = Number.isFinite(enrich?.brickid ?? Number.NaN) ? Number(enrich?.brickid) : null;
+    const euclidVisPathPattern = tileIndex ? buildEuclidVisPathPattern(tileIndex) : null;
+    const desiTractorIPath = brickname ? buildDesiTractorIPath(brickname) : null;
+    const desiImageGPath = brickname ? buildDesiImagePath(brickname, "g") : null;
+    const desiImageRPath = brickname ? buildDesiImagePath(brickname, "r") : null;
+    const desiImageIPath = brickname ? buildDesiImagePath(brickname, "i") : null;
+    const desiImageZPath = brickname ? buildDesiImagePath(brickname, "z") : null;
+
+    const missing: string[] = [];
+    if (!tileIndex) missing.push("tile_index_missing");
+    if (!brickname) missing.push("brickname_missing");
+    if (!Number.isFinite(e.mag_proxy ?? Number.NaN)) missing.push("mag_proxy_missing");
+    if (!Number.isFinite(e.seg_area ?? Number.NaN)) missing.push("seg_area_missing");
+
+    rows.push({
+      match_rank: idx + 1,
+      center_ra: center.ra_deg,
+      center_dec: center.dec_deg,
+      radius_arcsec: radiusArcsec,
+      dist_arcsec: 0,
+      separation_arcsec: 0,
+      obj_id: String(objId),
+      ra: e.ra_deg,
+      dec: e.dec_deg,
+      type: null,
+      tile_index: tileIndex,
+      tile_id: tileIndex,
+      brickname,
+      maskbits: Number.isFinite(e.maskbits ?? Number.NaN) ? Number(e.maskbits) : null,
+      mag_proxy: Number.isFinite(e.mag_proxy ?? Number.NaN) ? Number(e.mag_proxy) : null,
+      seg_area: Number.isFinite(e.seg_area ?? Number.NaN) ? Number(e.seg_area) : null,
+      segmentation_area: Number.isFinite(e.seg_area ?? Number.NaN) ? Number(e.seg_area) : null,
+      semimajor_axis: Number.isFinite(e.semimajor_axis ?? Number.NaN) ? Number(e.semimajor_axis) : null,
+      flux_segmentation: Number.isFinite(e.flux_segmentation ?? Number.NaN) ? Number(e.flux_segmentation) : null,
+      RIGHT_ASCENSION: e.ra_deg,
+      DECLINATION: e.dec_deg,
+      SEMIMAJOR_AXIS: Number.isFinite(e.semimajor_axis ?? Number.NaN) ? Number(e.semimajor_axis) : null,
+      SEGMENTATION_AREA: Number.isFinite(e.seg_area ?? Number.NaN) ? Number(e.seg_area) : null,
+      FLUX_SEGMENTATION: Number.isFinite(e.flux_segmentation ?? Number.NaN) ? Number(e.flux_segmentation) : null,
+      FLUX_VIS_1FWHM_APER: Number.isFinite(e.flux_vis_1fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_1fwhm_aper) : null,
+      FLUX_VIS_2FWHM_APER: Number.isFinite(e.flux_vis_2fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_2fwhm_aper) : null,
+      FLUX_VIS_3FWHM_APER: Number.isFinite(e.flux_vis_3fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_3fwhm_aper) : null,
+      FLUX_VIS_4FWHM_APER: Number.isFinite(e.flux_vis_4fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_4fwhm_aper) : null,
+      euclid_object_id: e.object_id,
+      desi_object_id: null,
+      euclid_ra: e.ra_deg,
+      euclid_dec: e.dec_deg,
+      desi_ra: null,
+      desi_dec: null,
+      brickid,
+      ra_deg: e.ra_deg,
+      dec_deg: e.dec_deg,
+      euclid_mag: e.mag,
+      desi_mag: null,
+      class_label: e.class_label,
+      source_id: e.source_id ?? null,
+      target_id: null,
+      tile_index_source: e.tile_index_source ?? (tileIndex ? "euclid.tile_index" : "pending_ra_dec_to_tile_mapping"),
+      mag_proxy_source: Number.isFinite(e.flux_vis_1fwhm_aper ?? Number.NaN) ? "euclid.flux_vis_1fwhm_aper" : "missing",
+      flux_g: null,
+      flux_r: null,
+      flux_i: null,
+      flux_z: null,
+      flux_w1: null,
+      flux_w2: null,
+      shape_r: null,
+      shape_e1: null,
+      shape_e2: null,
+      sersic: null,
+      ref_id: null,
+      release: null,
+      brick_primary: null,
+      allmask_r: null,
+      anymask_r: null,
+      fracmasked_r: null,
+      fracin_r: null,
+      fracflux_r: null,
+      fiberflux_r: null,
+      euclid_det_quality_flag: Number.isFinite(e.det_quality_flag ?? Number.NaN) ? Number(e.det_quality_flag) : null,
+      euclid_flag_vis: Number.isFinite(e.flag_vis ?? Number.NaN) ? Number(e.flag_vis) : null,
+      euclid_point_like_flag: Number.isFinite(e.point_like_flag ?? Number.NaN) ? Number(e.point_like_flag) : null,
+      euclid_extended_flag: Number.isFinite(e.extended_flag ?? Number.NaN) ? Number(e.extended_flag) : null,
+      euclid_semimajor_axis: Number.isFinite(e.semimajor_axis ?? Number.NaN) ? Number(e.semimajor_axis) : null,
+      euclid_flux_vis_1fwhm_aper: Number.isFinite(e.flux_vis_1fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_1fwhm_aper) : null,
+      euclid_flux_vis_2fwhm_aper: Number.isFinite(e.flux_vis_2fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_2fwhm_aper) : null,
+      euclid_flux_vis_3fwhm_aper: Number.isFinite(e.flux_vis_3fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_3fwhm_aper) : null,
+      euclid_flux_vis_4fwhm_aper: Number.isFinite(e.flux_vis_4fwhm_aper ?? Number.NaN) ? Number(e.flux_vis_4fwhm_aper) : null,
+      euclid_flux_vis_psf: Number.isFinite(e.flux_vis_psf ?? Number.NaN) ? Number(e.flux_vis_psf) : null,
+      euclid_flux_vis_sersic: Number.isFinite(e.flux_vis_sersic ?? Number.NaN) ? Number(e.flux_vis_sersic) : null,
+      euclid_vis_path_pattern: euclidVisPathPattern,
+      euclid_fits_path: euclidVisPathPattern,
+      desi_tractor_i_path: desiTractorIPath,
+      desi_tractor_i_fits_path: desiTractorIPath,
+      desi_image_g_path: desiImageGPath,
+      desi_fits_g_path: desiImageGPath,
+      desi_image_r_path: desiImageRPath,
+      desi_fits_r_path: desiImageRPath,
+      desi_image_i_path: desiImageIPath,
+      desi_fits_i_path: desiImageIPath,
+      desi_image_z_path: desiImageZPath,
+      desi_fits_z_path: desiImageZPath,
+      path_source: "derived",
+      missing_reasons: appendMissing("none", missing)
+    });
+  }
+
+  return rows;
 }
 
 export function crossmatchCatalogs(
@@ -87,7 +233,7 @@ export function crossmatchCatalogs(
     const distArcsec = Number(bestSep.toFixed(6));
 
     const objId = best.obj_id ?? best.object_id ?? e.obj_id ?? e.object_id;
-    const tileIndex = e.tile_index ?? null;
+    const tileIndex = normalizeTileId(e.tile_index ?? null);
     const brickname = best.brickname ?? null;
     const maskbits = Number.isFinite(best.maskbits ?? Number.NaN)
       ? Number(best.maskbits)
@@ -97,7 +243,8 @@ export function crossmatchCatalogs(
     const segArea = Number.isFinite(e.seg_area ?? Number.NaN)
       ? Number(e.seg_area)
       : (Number.isFinite(best.seg_area ?? Number.NaN) ? Number(best.seg_area) : null);
-    const type = best.type ?? e.type ?? best.class_label ?? e.class_label ?? "unknown";
+    const typeValue = best.type ?? e.type ?? best.class_label ?? e.class_label ?? "";
+    const type = typeof typeValue === "string" && typeValue.trim().length > 0 ? typeValue : null;
     const brickid = Number.isFinite(best.brickid ?? Number.NaN) ? Number(best.brickid) : null;
     const tileIndexSource = e.tile_index_source ?? (tileIndex !== null ? "euclid.tile_index" : "pending_ra_dec_to_tile_mapping");
     const pathSource = String(best.source_system ?? "").toLowerCase().startsWith("mock")
@@ -131,10 +278,23 @@ export function crossmatchCatalogs(
       dec: best.dec_deg,
       type,
       tile_index: tileIndex,
+      tile_id: tileIndex,
       brickname,
       maskbits,
       mag_proxy: magProxy,
       seg_area: segArea,
+      segmentation_area: segArea,
+      semimajor_axis: toFiniteOrNull(e.semimajor_axis),
+      flux_segmentation: toFiniteOrNull(e.flux_segmentation),
+      RIGHT_ASCENSION: e.ra_deg,
+      DECLINATION: e.dec_deg,
+      SEMIMAJOR_AXIS: toFiniteOrNull(e.semimajor_axis),
+      SEGMENTATION_AREA: segArea,
+      FLUX_SEGMENTATION: toFiniteOrNull(e.flux_segmentation),
+      FLUX_VIS_1FWHM_APER: toFiniteOrNull(e.flux_vis_1fwhm_aper),
+      FLUX_VIS_2FWHM_APER: toFiniteOrNull(e.flux_vis_2fwhm_aper),
+      FLUX_VIS_3FWHM_APER: toFiniteOrNull(e.flux_vis_3fwhm_aper),
+      FLUX_VIS_4FWHM_APER: toFiniteOrNull(e.flux_vis_4fwhm_aper),
       euclid_object_id: e.object_id,
       desi_object_id: best.object_id,
       euclid_ra: e.ra_deg,
@@ -182,11 +342,17 @@ export function crossmatchCatalogs(
       euclid_flux_vis_psf: toFiniteOrNull(e.flux_vis_psf),
       euclid_flux_vis_sersic: toFiniteOrNull(e.flux_vis_sersic),
       euclid_vis_path_pattern: euclidVisPathPattern,
+      euclid_fits_path: euclidVisPathPattern,
       desi_tractor_i_path: desiTractorIPath,
+      desi_tractor_i_fits_path: desiTractorIPath,
       desi_image_g_path: desiImageGPath,
+      desi_fits_g_path: desiImageGPath,
       desi_image_r_path: desiImageRPath,
+      desi_fits_r_path: desiImageRPath,
       desi_image_i_path: desiImageIPath,
+      desi_fits_i_path: desiImageIPath,
       desi_image_z_path: desiImageZPath,
+      desi_fits_z_path: desiImageZPath,
       path_source: pathSource,
       missing_reasons: missingReasons.length > 0 ? missingReasons.join(";") : "none"
     });

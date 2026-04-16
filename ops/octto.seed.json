@@ -8,7 +8,7 @@
   "fragments": {
     "octto": [
       "This project orchestrates Euclid x DESI crossmatch runs and must keep run artifacts under runs/<run_id>/.",
-      "Decision interactions should map to filter_entry_request.json/human_gate_request.json response contracts."
+      "Decision interactions should map to selection_plan_request.json and region_adjust_request.json response contracts."
     ],
     "probe": [
       "Prefer concise decision questions aligned to crossmatch/filter flow."

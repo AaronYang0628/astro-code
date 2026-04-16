@@ -43,8 +43,8 @@ Inspect `runs/<run_id>/` for all generated artifacts.
 ## Troubleshooting
 
 - Python extractor errors: verify `python3` and `astropy` are installed.
-- No filter applied: provide `filter` in request JSON, or complete backend-driven filter confirmation/condition responses (`filter_entry_response.json` and `human_gate_response.json`).
-- Empty crossmatch: increase `radiusArcsec` or verify MCP query output.
+- Selection defaults applied: provide `selection.conditions` in request JSON, or complete `selection_plan_response.json`.
+- Empty candidate pool: increase `radiusArcsec` or verify MCP query output.
 
 ## Build image (local)
 

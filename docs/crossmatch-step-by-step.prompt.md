@@ -51,7 +51,7 @@ brick_primary=true
 7. 发起当前后端 confirm：是否进入结果筛选？
 8. 仅当我回答“是”时，收集多条件筛选并应用
 9. 最终逐行输出文件绝对路径：
-   crossmatch.csv
+   candidate_pool.csv
    preview_100.csv
    preview_summary.json
    filtered.csv

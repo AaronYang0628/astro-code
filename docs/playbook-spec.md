@@ -31,7 +31,6 @@ Playbooks are markdown files with YAML frontmatter.
 - `desi-query`
 - `crossmatch`
 - `preview-export`
-- `human-filter-gate`
 - `filtered-export`
 
 ## Human-in-the-loop behavior
@@ -39,10 +38,9 @@ Playbooks are markdown files with YAML frontmatter.
 HITL uses configured backend (`native|octto|hybrid`) and writes auditable requests into `runs/<run_id>/`:
 
 - Zero-hit branch: write `region_adjust_request.json`
-- Filter entry confirmation: write `filter_entry_request.json`, then read `filter_entry_response.json`
-- Filter condition collection: write `human_gate_request.json`, then read `human_gate_response.json`
+- Six-condition selection plan: write `selection_plan_request.json`, then read `selection_plan_response.json`
 
-If no valid filter response exists, pipeline continues without additional filtering.
+If no valid selection response exists, pipeline continues with default/empty selection plan.
 
 ## MCP response mapping example
 

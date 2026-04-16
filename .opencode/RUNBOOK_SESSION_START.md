@@ -30,7 +30,7 @@
 - 打印匹配参数
 - 打印 preview 摘要与 markdown 表格样例
 - 打印结果文件绝对路径：
-  - `crossmatch.csv`
+  - `candidate_pool.csv`
   - `preview_100.csv`
   - `preview_summary.json`
   - `filtered.csv`

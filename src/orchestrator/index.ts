@@ -1,5 +1,8 @@
 import path from "node:path";
+import fs from "node:fs";
 import { runMvpPipeline } from "./runner.js";
+import { loadConfig } from "./config.js";
+import type { RunArtifacts, RunSummary } from "./types.js";
 
 function toMarkdownTable(rows: Record<string, unknown>[], headers: string[]): string {
   if (rows.length === 0 || headers.length === 0) {
@@ -27,10 +30,68 @@ function argValue(flag: string): string | undefined {
   return process.argv[idx + 1];
 }
 
+function candidatePoolPath(artifacts: RunArtifacts): string | undefined {
+  return artifacts.candidatePoolCsv;
+}
+
+function candidatePoolRows(summary: RunSummary): number | undefined {
+  return summary.candidatePoolRows;
+}
+
+function routePlaybookByIntent(requestText: string): string | undefined {
+  const text = requestText.toLowerCase();
+  const hasS3 = text.includes("s3://");
+  const hasRaDec = /\bra\s*=|\bdec\s*=/.test(text);
+
+  const asksCrossmatch = text.includes("crossmatch") || text.includes("交叉匹配") || text.includes("euclid与desi") || text.includes("euclid and desi");
+  const asksEuclidSingle = text.includes("euclid单星表") || text.includes("euclid single") || text.includes("图像对齐") || text.includes("cutout") || text.includes("space align");
+  const asksDesiSingle = text.includes("desi单星表") || text.includes("desi single");
+
+  if (hasS3 && asksCrossmatch) {
+    return "playbooks/euclid_desi_mvp.playbook.md";
+  }
+  if (hasRaDec && asksEuclidSingle) {
+    return "playbooks/euclid_cutout_mvp.playbook.md";
+  }
+  if (hasRaDec && asksDesiSingle) {
+    return "playbooks/desi_cutout_mvp.playbook.md";
+  }
+  return undefined;
+}
+
+function mapWorkflowToPlaybook(workflow: string): string | undefined {
+  const w = workflow.trim().toLowerCase();
+  if (w === "euclid_desi_crossmatch") {
+    return "playbooks/euclid_desi_mvp.playbook.md";
+  }
+  if (w === "euclid_cutout") {
+    return "playbooks/euclid_cutout_mvp.playbook.md";
+  }
+  if (w === "desi_cutout") {
+    return "playbooks/desi_cutout_mvp.playbook.md";
+  }
+  return undefined;
+}
+
 async function main(): Promise<void> {
   const configPath = argValue("--pipeline-config") ?? argValue("--config") ?? "pipeline.config.yaml";
-  const playbookPath = argValue("--playbook") ?? "playbooks/euclid_desi_mvp.playbook.md";
+  const config = loadConfig(path.resolve(configPath));
   const requestPath = argValue("--request") ?? "examples/request.radec.json";
+
+  let intentPlaybook: string | undefined;
+  try {
+    const rawRequest = JSON.parse(fs.readFileSync(path.resolve(requestPath), "utf8")) as Record<string, unknown>;
+    const workflow = typeof rawRequest.workflow === "string" ? rawRequest.workflow : "";
+    intentPlaybook = mapWorkflowToPlaybook(workflow) ?? routePlaybookByIntent(JSON.stringify(rawRequest));
+  } catch {
+    intentPlaybook = undefined;
+  }
+
+  const playbookPath = argValue("--playbook")
+    ?? intentPlaybook
+    ?? config.paths.default_playbook;
+
+  process.stdout.write(`Playbook selected: ${path.resolve(playbookPath)}\n`);
 
   const result = await runMvpPipeline({
     configPath: path.resolve(configPath),
@@ -46,8 +107,7 @@ async function main(): Promise<void> {
   process.stdout.write(`Execution mode: ${result.summary.executionMode}\n`);
   process.stdout.write(`Run mode: ${result.summary.mode}\n`);
   process.stdout.write(`Matching params: RA=${result.summary.raDeg}, DEC=${result.summary.decDeg}, radiusArcsec=${result.summary.radiusArcsec}, topK=${result.summary.topK}, desiHits=${result.summary.desiHits}\n`);
-  process.stdout.write(`Crossmatch rows: ${result.summary.crossmatchRows}\n`);
-  process.stdout.write(`Image pair rows: ${result.summary.imagePairRows}\n`);
+  process.stdout.write(`Candidate pool rows: ${candidatePoolRows(result.summary)}\n`);
   process.stdout.write(`Preview rows: ${result.summary.previewRows}\n`);
   process.stdout.write(`Filtered rows: ${result.summary.filteredRows}\n`);
   process.stdout.write(`Human gate mode: ${result.summary.humanGateMode}\n`);
@@ -62,11 +122,9 @@ async function main(): Promise<void> {
     process.stdout.write(`${table}\n`);
   }
   process.stdout.write(`Input manifest: ${result.artifacts.inputManifestJson}\n`);
-  if (result.artifacts.crossmatchCsv) {
-    process.stdout.write(`Crossmatch CSV: ${result.artifacts.crossmatchCsv}\n`);
-  }
-  if (result.artifacts.imagePairIndexCsv) {
-    process.stdout.write(`Image pair index CSV: ${result.artifacts.imagePairIndexCsv}\n`);
+  const candidatePoolCsv = candidatePoolPath(result.artifacts);
+  if (candidatePoolCsv) {
+    process.stdout.write(`Candidate pool CSV: ${candidatePoolCsv}\n`);
   }
   if (result.artifacts.desiOriginJson) {
     process.stdout.write(`DESI origin: ${result.artifacts.desiOriginJson}\n`);
@@ -96,13 +154,25 @@ async function main(): Promise<void> {
   if (result.artifacts.filteredCsv) {
     process.stdout.write(`Filtered CSV: ${result.artifacts.filteredCsv}\n`);
   }
+  if (result.artifacts.selectionCandidatesCsv) {
+    process.stdout.write(`Selection candidates CSV: ${result.artifacts.selectionCandidatesCsv}\n`);
+  }
+  if (result.artifacts.selectionFinalCsv) {
+    process.stdout.write(`Selection final CSV: ${result.artifacts.selectionFinalCsv}\n`);
+  }
+  if (result.artifacts.selectionReportJson) {
+    process.stdout.write(`Selection report JSON: ${result.artifacts.selectionReportJson}\n`);
+  }
+  if (result.artifacts.selectionPlanRequestJson) {
+    process.stdout.write(`Selection plan request: ${result.artifacts.selectionPlanRequestJson}\n`);
+  }
+  if (result.artifacts.selectionPlanResponseJson) {
+    process.stdout.write(`Selection plan response: ${result.artifacts.selectionPlanResponseJson}\n`);
+  }
   process.stdout.write(`Report: ${result.artifacts.reportMd}\n`);
   process.stdout.write(`Result index: ${result.artifacts.resultIndexJson}\n`);
   if (result.artifacts.regionAdjustRequestJson) {
     process.stdout.write(`Region adjust request: ${result.artifacts.regionAdjustRequestJson}\n`);
-  }
-  if (result.artifacts.humanGateRequestJson) {
-    process.stdout.write(`Human filter request: ${result.artifacts.humanGateRequestJson}\n`);
   }
 }
 

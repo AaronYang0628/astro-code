@@ -145,6 +145,59 @@ function toStringOrUndefined(value: unknown): string | undefined {
   return undefined;
 }
 
+function normalizeTileId(value: unknown): string | undefined {
+  const raw = toStringOrUndefined(value);
+  if (!raw) {
+    return undefined;
+  }
+  if (/^\d{6,12}$/.test(raw)) {
+    return raw;
+  }
+  const embedded = raw.match(/(\d{6,12})/);
+  return embedded?.[1];
+}
+
+function pickNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    if (key in record) {
+      const n = toNumber(record[key]);
+      if (n !== null) {
+        return n;
+      }
+    }
+  }
+  return undefined;
+}
+
+function pickString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (key in record) {
+      const value = toStringOrUndefined(record[key]);
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function pickAny(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in record) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
+function inferEuclidTypeLabel(record: Record<string, unknown>): string {
+  const explicit = pickString(record, ["TYPE", "type", "OBJECT_CLASS", "object_class", "CLASS", "class"]);
+  if (explicit) {
+    return explicit;
+  }
+  return "";
+}
+
 function normalizeType(value: unknown, fallback = "unknown"): string {
   const maybe = toStringOrUndefined(value);
   return maybe ?? fallback;
@@ -169,7 +222,33 @@ function tileCacheKey(ra: number, dec: number, catalogPath?: string): string {
   return `${pathPart}|ra=${ra.toFixed(8)}|dec=${dec.toFixed(8)}`;
 }
 
+function extractTileIdFromPath(catalogPath?: string): string | undefined {
+  if (!catalogPath || catalogPath.trim().length === 0) {
+    return undefined;
+  }
+  const patterns = [
+    /TILE(\d{6,12})/i,
+    /FINAL[_-]CATALOG[_-](\d{6,12})/i,
+    /(?:^|[_\-/])(\d{9})(?:[_\-.]|$)/
+  ];
+  for (const pattern of patterns) {
+    const matched = catalogPath.match(pattern);
+    if (matched && matched[1]) {
+      return normalizeTileId(matched[1]);
+    }
+  }
+  return undefined;
+}
+
 async function resolveTileIdByCoord(ra: number, dec: number, catalogPath?: string): Promise<{ tile_id?: string; source: string }> {
+  const tileFromPath = extractTileIdFromPath(catalogPath);
+  if (tileFromPath) {
+    return {
+      tile_id: tileFromPath,
+      source: "euclid.s3_path_filename"
+    };
+  }
+
   const key = tileCacheKey(ra, dec, catalogPath);
   const cached = tileResolveCache.get(key);
   if (cached) {
@@ -183,7 +262,7 @@ async function resolveTileIdByCoord(ra: number, dec: number, catalogPath?: strin
       catalog_path: catalogPath ?? "",
     }) as Record<string, unknown>;
 
-    const tile_id = toStringOrUndefined(payload.tile_id);
+    const tile_id = normalizeTileId(payload.tile_id);
     const mapping = (payload.mapping as Record<string, unknown> | undefined) ?? {};
     const method = toStringOrUndefined(mapping.method) ?? "resolve_tile_id";
     const source = tile_id ? `euclid.resolve_tile_id:${method}` : "pending_ra_dec_to_tile_mapping";
@@ -285,7 +364,7 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
         continue;
       }
 
-      let tileIndex = toStringOrUndefined(
+      let tileIndex = normalizeTileId(
         source.TILE_INDEX
         ?? source.tile_index
         ?? source.TILEID
@@ -332,7 +411,7 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
             source.mag,
             source.MAG
           ]),
-        type: normalizeType(source.type ?? source.TYPE ?? source.EXTENDED_FLAG ?? source.extended_flag),
+        type: normalizeType(inferEuclidTypeLabel(source), ""),
         class_label: String(
           source.EXTENDED_FLAG
           ?? source.extended_flag
@@ -354,6 +433,7 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
         point_like_flag: toNumber(source.POINT_LIKE_FLAG ?? source.point_like_flag) ?? undefined,
         extended_flag: toNumber(source.EXTENDED_FLAG ?? source.extended_flag) ?? undefined,
         semimajor_axis: toNumber(source.SEMIMAJOR_AXIS ?? source.semimajor_axis) ?? undefined,
+        flux_segmentation: toNumber(source.FLUX_SEGMENTATION ?? source.flux_segmentation) ?? undefined,
         flux_vis_1fwhm_aper: toNumber(source.FLUX_VIS_1FWHM_APER ?? source.flux_vis_1fwhm_aper) ?? undefined,
         flux_vis_2fwhm_aper: toNumber(source.FLUX_VIS_2FWHM_APER ?? source.flux_vis_2fwhm_aper) ?? undefined,
         flux_vis_3fwhm_aper: toNumber(source.FLUX_VIS_3FWHM_APER ?? source.flux_vis_3fwhm_aper) ?? undefined,
@@ -380,13 +460,13 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
       continue;
     }
     const record = obj as Record<string, unknown>;
-    const ra = toNumber(record.RIGHT_ASCENSION);
-    const dec = toNumber(record.DECLINATION);
-    if (ra === null || dec === null) {
+    const ra = pickNumber(record, ["RIGHT_ASCENSION", "right_ascension", "RA", "ra"]);
+    const dec = pickNumber(record, ["DECLINATION", "declination", "DEC", "dec"]);
+    if (ra === undefined || dec === undefined) {
       continue;
     }
 
-    let tileIndex = toStringOrUndefined(
+    let tileIndex = normalizeTileId(
       record.TILE_INDEX
       ?? record.tile_index
       ?? record.TILEID
@@ -401,50 +481,40 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
 
     rows.push({
       catalog: "euclid",
-      object_id: String(record.OBJECT_ID ?? `EUCLID_${rows.length + 1}`),
-      obj_id: String(record.OBJECT_ID ?? `EUCLID_${rows.length + 1}`),
+      object_id: String(pickAny(record, ["OBJECT_ID", "object_id", "SOURCE_ID", "source_id", "TARGET_ID", "target_id"]) ?? `EUCLID_${rows.length + 1}`),
+      obj_id: String(pickAny(record, ["OBJECT_ID", "object_id", "SOURCE_ID", "source_id", "TARGET_ID", "target_id"]) ?? `EUCLID_${rows.length + 1}`),
       ra_deg: ra,
       dec_deg: dec,
-      mag: fluxToMagEuclidMuJy(toNumber(record.FLUX_VIS_1FWHM_APER))
+      mag: fluxToMagEuclidMuJy(pickNumber(record, ["FLUX_VIS_1FWHM_APER", "flux_vis_1fwhm_aper"]) ?? null)
         ?? firstFinite([
-          record.MAG_VIS,
-          record.mag_vis,
-          record.MAG_AUTO,
-          record.mag_auto,
-          record.mag,
-          record.MAG
+          pickAny(record, ["MAG_VIS", "mag_vis"]),
+          pickAny(record, ["MAG_AUTO", "mag_auto"]),
+          pickAny(record, ["MAG", "mag"])
         ]),
-      mag_proxy: fluxToMagEuclidMuJy(toNumber(record.FLUX_VIS_1FWHM_APER))
+      mag_proxy: fluxToMagEuclidMuJy(pickNumber(record, ["FLUX_VIS_1FWHM_APER", "flux_vis_1fwhm_aper"]) ?? null)
         ?? firstFinite([
-          record.MAG_VIS,
-          record.mag_vis,
-          record.MAG_AUTO,
-          record.mag_auto,
-          record.mag,
-          record.MAG
+          pickAny(record, ["MAG_VIS", "mag_vis"]),
+          pickAny(record, ["MAG_AUTO", "mag_auto"]),
+          pickAny(record, ["MAG", "mag"])
         ]),
       class_label: "unknown",
-      type: normalizeType(record.TYPE ?? record.type),
+      type: normalizeType(inferEuclidTypeLabel(record), ""),
       tile_index: tileIndex,
       tile_index_source: tileIndexSource,
-      maskbits: toNumber(record.MASKBITS ?? record.maskbits) ?? undefined,
-      seg_area: toNumber(
-        record.SEGMENTATION_AREA
-        ?? record.segmentation_area
-        ?? record.SEG_AREA
-        ?? record.seg_area
-      ) ?? undefined,
-      det_quality_flag: toNumber(record.DET_QUALITY_FLAG ?? record.det_quality_flag) ?? undefined,
-      flag_vis: toNumber(record.FLAG_VIS ?? record.flag_vis) ?? undefined,
-      point_like_flag: toNumber(record.POINT_LIKE_FLAG ?? record.point_like_flag) ?? undefined,
-      extended_flag: toNumber(record.EXTENDED_FLAG ?? record.extended_flag) ?? undefined,
-      semimajor_axis: toNumber(record.SEMIMAJOR_AXIS ?? record.semimajor_axis) ?? undefined,
-      flux_vis_1fwhm_aper: toNumber(record.FLUX_VIS_1FWHM_APER ?? record.flux_vis_1fwhm_aper) ?? undefined,
-      flux_vis_2fwhm_aper: toNumber(record.FLUX_VIS_2FWHM_APER ?? record.flux_vis_2fwhm_aper) ?? undefined,
-      flux_vis_3fwhm_aper: toNumber(record.FLUX_VIS_3FWHM_APER ?? record.flux_vis_3fwhm_aper) ?? undefined,
-      flux_vis_4fwhm_aper: toNumber(record.FLUX_VIS_4FWHM_APER ?? record.flux_vis_4fwhm_aper) ?? undefined,
-      flux_vis_psf: toNumber(record.FLUX_VIS_PSF ?? record.flux_vis_psf) ?? undefined,
-      flux_vis_sersic: toNumber(record.FLUX_VIS_SERSIC ?? record.flux_vis_sersic) ?? undefined
+      maskbits: pickNumber(record, ["MASKBITS", "maskbits"]),
+      seg_area: pickNumber(record, ["SEGMENTATION_AREA", "segmentation_area", "SEG_AREA", "seg_area"]),
+      det_quality_flag: pickNumber(record, ["DET_QUALITY_FLAG", "det_quality_flag"]),
+      flag_vis: pickNumber(record, ["FLAG_VIS", "flag_vis"]),
+      point_like_flag: pickNumber(record, ["POINT_LIKE_FLAG", "point_like_flag"]),
+      extended_flag: pickNumber(record, ["EXTENDED_FLAG", "extended_flag"]),
+      semimajor_axis: pickNumber(record, ["SEMIMAJOR_AXIS", "semimajor_axis"]),
+      flux_segmentation: pickNumber(record, ["FLUX_SEGMENTATION", "flux_segmentation"]),
+      flux_vis_1fwhm_aper: pickNumber(record, ["FLUX_VIS_1FWHM_APER", "flux_vis_1fwhm_aper"]),
+      flux_vis_2fwhm_aper: pickNumber(record, ["FLUX_VIS_2FWHM_APER", "flux_vis_2fwhm_aper"]),
+      flux_vis_3fwhm_aper: pickNumber(record, ["FLUX_VIS_3FWHM_APER", "flux_vis_3fwhm_aper"]),
+      flux_vis_4fwhm_aper: pickNumber(record, ["FLUX_VIS_4FWHM_APER", "flux_vis_4fwhm_aper"]),
+      flux_vis_psf: pickNumber(record, ["FLUX_VIS_PSF", "flux_vis_psf"]),
+      flux_vis_sersic: pickNumber(record, ["FLUX_VIS_SERSIC", "flux_vis_sersic"])
     });
   }
 

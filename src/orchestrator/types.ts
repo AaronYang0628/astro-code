@@ -21,13 +21,81 @@ export interface FilterSpec {
   conditions: FilterCondition[];
 }
 
+export type SelectionConditionId =
+  | "galaxy_fraction"
+  | "bright_maskbits_filter"
+  | "faint_mag_limit"
+  | "small_dim_galaxy_filter"
+  | "oversized_galaxy_filter"
+  | "uniform_mag_sampling";
+
+export interface SelectionConditionConfig {
+  id: SelectionConditionId;
+  params?: Record<string, unknown>;
+}
+
+export interface SelectionPlan {
+  conditions: SelectionConditionConfig[];
+}
+
 export interface RunRequest {
   input: InputSpec;
+  workflow?: "euclid_desi_crossmatch" | "euclid_cutout" | "desi_cutout" | string;
   radiusArcsec?: number;
   topK?: number;
   previewRows?: number;
   interaction?: InteractionMode;
   filter?: FilterCondition | FilterSpec;
+  selection?: SelectionPlan;
+}
+
+export interface RunArtifacts {
+  statusJson: string;
+  inputManifestJson: string;
+  euclidQueryCsv?: string;
+  desiQueryCsv?: string;
+  desiOriginJson?: string;
+  desiSearchQueryJson?: string;
+  desiSearchInitialRawJson?: string;
+  desiSearchSampleRawJson?: string;
+  desiSearchRetryRawJson?: string;
+  desiSearchRetrySampleRawJson?: string;
+  candidatePoolCsv?: string;
+  previewCsv?: string;
+  previewSummaryJson?: string;
+  filteredCsv?: string;
+  statsJson: string;
+  reportMd: string;
+  resultIndexJson: string;
+  humanGateRequestJson?: string;
+  regionAdjustRequestJson?: string;
+  t1SchemaReportJson?: string;
+  qcReportJson?: string;
+  fieldLineageDocMd?: string;
+  mockContinueHandoffJson?: string;
+  selectionCandidatesCsv?: string;
+  selectionFinalCsv?: string;
+  selectionReportJson?: string;
+  selectionPlanRequestJson?: string;
+  selectionPlanResponseJson?: string;
+}
+
+export interface RunSummary {
+  mode: "pipeline";
+  raDeg?: number;
+  decDeg?: number;
+  radiusArcsec?: number;
+  topK?: number;
+  desiHits?: number;
+  candidatePoolRows?: number;
+  previewRows?: number;
+  filteredRows?: number;
+  availableFilterFields?: string[];
+  previewSample?: Record<string, unknown>[];
+  humanGateMode?: "filter" | "filter_confirm" | "region_adjust" | "mock_continue" | "none";
+  executionMode: "ts_orchestrator";
+  t1RowsWithMissing?: number;
+  mockChildRunId?: string;
 }
 
 export interface Coord {
@@ -92,6 +160,7 @@ export interface CatalogRecord {
   flux_vis_4fwhm_aper?: number;
   flux_vis_psf?: number;
   flux_vis_sersic?: number;
+  flux_segmentation?: number;
 }
 
 export interface CrossmatchRecord {
@@ -104,23 +173,36 @@ export interface CrossmatchRecord {
   obj_id: string;
   ra: number;
   dec: number;
-  type: string;
+  type: string | null;
   tile_index: string | null;
+  tile_id?: string | null;
   brickname: string | null;
   maskbits: number | null;
   mag_proxy: number | null;
   seg_area: number | null;
+  segmentation_area?: number | null;
+  semimajor_axis?: number | null;
+  flux_segmentation?: number | null;
+  RIGHT_ASCENSION?: number | null;
+  DECLINATION?: number | null;
+  SEMIMAJOR_AXIS?: number | null;
+  SEGMENTATION_AREA?: number | null;
+  FLUX_SEGMENTATION?: number | null;
+  FLUX_VIS_1FWHM_APER?: number | null;
+  FLUX_VIS_2FWHM_APER?: number | null;
+  FLUX_VIS_3FWHM_APER?: number | null;
+  FLUX_VIS_4FWHM_APER?: number | null;
   euclid_object_id: string;
-  desi_object_id: string;
+  desi_object_id: string | null;
   euclid_ra: number;
   euclid_dec: number;
-  desi_ra: number;
-  desi_dec: number;
+  desi_ra: number | null;
+  desi_dec: number | null;
   brickid: number | null;
   ra_deg: number;
   dec_deg: number;
   euclid_mag: number;
-  desi_mag: number;
+  desi_mag: number | null;
   class_label: string;
   source_id: string | null;
   target_id: string | null;
@@ -157,11 +239,17 @@ export interface CrossmatchRecord {
   euclid_flux_vis_psf: number | null;
   euclid_flux_vis_sersic: number | null;
   euclid_vis_path_pattern: string | null;
+  euclid_fits_path?: string | null;
   desi_tractor_i_path: string | null;
+  desi_tractor_i_fits_path?: string | null;
   desi_image_g_path: string | null;
+  desi_fits_g_path?: string | null;
   desi_image_r_path: string | null;
+  desi_fits_r_path?: string | null;
   desi_image_i_path: string | null;
+  desi_fits_i_path?: string | null;
   desi_image_z_path: string | null;
+  desi_fits_z_path?: string | null;
   path_source: string;
   missing_reasons: string;
 }

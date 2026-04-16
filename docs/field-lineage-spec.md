@@ -33,7 +33,7 @@ It is the canonical reference for Phase-2 T1 field provenance.
 | `mag_proxy` | DESI preferred / Euclid fallback | `astro_k3s_mcp.es_query` + `euclid-catalog.get_catalog_objects` | DESI `_source`; Euclid `_source`/`objects[*]` | DESI `flux_r` or `mag_*`; Euclid `FLUX_VIS_1FWHM_APER` or `MAG_*` | DESI: `22.5 - 2.5*log10(flux_r)`; Euclid: `23.9 - 2.5*log10(flux_vis_1fwhm_aper)` | `null` + `mag_proxy_missing` |
 | `seg_area` | Euclid preferred / DESI fallback | `astro_k3s_mcp.es_query` + `euclid-catalog.get_catalog_objects` | Euclid `_source`/`objects[*]`; DESI `_source` | `SEGMENTATION_AREA`/`seg_area` | numeric cast | `null` + `seg_area_missing` |
 
-## Additional Leveraged Fields (already included in `crossmatch.csv`)
+## Additional Leveraged Fields (already included in `candidate_pool.csv`)
 
 | output field | source catalog | MCP server/tool | source field |
 | --- | --- | --- | --- |

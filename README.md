@@ -20,7 +20,7 @@ Multi-agent astronomy workflow project focused on Euclid x DESI MVP flow.
 - `src/orchestrator/`: TypeScript orchestration MVP
 - `py/workers/`: Python helpers used in local data tooling
 - `.opencode/agents|skills|plugins/`: contracts for agentic runtime
-- `runs/`: runtime outputs (`status.json`, `crossmatch.csv`, `preview_100.csv`, `filtered.csv`)
+- `runs/`: runtime outputs (`status.json`, `candidate_pool.csv`, `preview_100.csv`, `filtered.csv`)
 - `docs/`: architecture and contracts
 
 ## Quick start
@@ -40,7 +40,7 @@ npm run run:mvp
 
 3) Check output files under `runs/<run_id>/`
 
-- `crossmatch.csv`
+- `candidate_pool.csv`
 - `preview_100.csv`
 - `filtered.csv`
 - `stats.json`

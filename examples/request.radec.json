@@ -1,0 +1,11 @@
+{
+  "workflow": "euclid_cutout",
+  "input": {
+    "type": "radec_text",
+    "value": "150.114,-2.345"
+  },
+  "radiusArcsec": 1.0,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web"
+}

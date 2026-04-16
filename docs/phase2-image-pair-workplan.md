@@ -15,7 +15,7 @@ Model training is out of scope.
 
 ### Inputs
 
-- `runs/<run_id>/crossmatch.csv` (candidate list from step-1)
+- `runs/<run_id>/candidate_pool.csv` (candidate list from step-1)
 - Euclid image/catalog paths
 - DESI image/catalog paths (currently DR10 available as primary)
 
@@ -61,7 +61,7 @@ Required minimum fields:
 
 Acceptance:
 
-- 100% rows in `crossmatch.csv` contain required fields or explicit null with reason.
+- 100% rows in `candidate_pool.csv` contain required fields or explicit null with reason.
 - Missing-field reasons are written to `status.json` and `qc_report.json`.
 
 ### T2. Image Path Resolver

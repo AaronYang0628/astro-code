@@ -37,7 +37,7 @@ RA=51.12015772112324, DEC=-26.971838908444358, radiusArcsec=250.0
 - hits统计（首次/重试）
 - preview统计（preview rows / 可筛选字段 / 前3条样例）
 - 结果文件绝对路径（逐行）：
-crossmatch.csv
+candidate_pool.csv
 preview_100.csv
 preview_summary.json
 filtered.csv
@@ -72,7 +72,7 @@ radiusArcsec=250.0
    - 阻塞等待我的选择（不要继续其他步骤）
    - 收到后打印：Received selection: radius=<X> arcsec
    - 用所选半径继续执行并给出重试结果
-6) 若 crossmatch_rows > 0：
+6) 若 candidate_pool_rows > 0：
     - 先输出 preview 摘要：`preview rows`、`available filter fields`、前10条样例
     - 通过当前交互后端问用户：是否进入结果筛选？
 7) 若用户回答“是”：
@@ -92,8 +92,8 @@ radiusArcsec=250.0
    - 若重试：半径与第二次命中数
    - preview统计：`preview rows`、`available filter fields`、前3条样例
    - 示例记录（最多3条）
-   - 文件绝对路径（逐行）：
-     crossmatch.csv
+     - 文件绝对路径（逐行）：
+      candidate_pool.csv
      preview_100.csv
      preview_summary.json
      filtered.csv

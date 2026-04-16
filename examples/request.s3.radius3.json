@@ -1,0 +1,11 @@
+{
+  "workflow": "euclid_desi_crossmatch",
+  "input": {
+    "type": "s3_uri",
+    "value": "s3://replace-me/euclid/catalog.fits"
+  },
+  "radiusArcsec": 3.0,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web"
+}

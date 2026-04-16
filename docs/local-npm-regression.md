@@ -61,7 +61,7 @@ npm run run -- --request examples/request.s3.radius3.json --playbook playbooks/e
 
 Command output should print absolute paths for:
 
-- `crossmatch.csv`
+- `candidate_pool.csv`
 - `preview_100.csv`
 - `preview_summary.json`
 - `filtered.csv`

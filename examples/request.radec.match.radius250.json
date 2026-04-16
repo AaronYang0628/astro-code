@@ -1,0 +1,11 @@
+{
+  "workflow": "euclid_desi_crossmatch",
+  "input": {
+    "type": "radec_text",
+    "value": "150.114,-2.345"
+  },
+  "radiusArcsec": 250,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web"
+}

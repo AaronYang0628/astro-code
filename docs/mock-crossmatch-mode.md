@@ -49,7 +49,7 @@ npm run run -- --request /tmp/request.t1.verify.json --playbook playbooks/euclid
 - `desi_origin.json` contains:
   - `backend_type: mock_seeded_from_real_desi`
 
-- `crossmatch.csv` and `image_pair_index.csv` contain:
+- `candidate_pool.csv` contains:
   - `path_source=mock`
   - derived Euclid/DESI path fields for downstream T2 validation
 

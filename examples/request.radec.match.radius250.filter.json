@@ -1,0 +1,28 @@
+{
+  "workflow": "euclid_desi_crossmatch",
+  "input": {
+    "type": "radec_text",
+    "value": "150.114,-2.345"
+  },
+  "radiusArcsec": 250,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web",
+  "selection": {
+    "conditions": [
+      {
+        "id": "faint_mag_limit",
+        "params": {
+          "mag_max": 24
+        }
+      },
+      {
+        "id": "galaxy_fraction",
+        "params": {
+          "total_samples": 100,
+          "galaxy_fraction": 0.5
+        }
+      }
+    ]
+  }
+}

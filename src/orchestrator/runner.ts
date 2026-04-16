@@ -3,13 +3,14 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { loadConfig } from "./config.js";
 import { extractCoord } from "./coord.js";
-import { crossmatchCatalogs } from "./crossmatch.js";
-import { applyFilter } from "./filter.js";
-import { resolveHumanFilter } from "./human-gate.js";
+import { buildCandidatePoolFromEuclidOnly, crossmatchCatalogs } from "./crossmatch.js";
+import { resolveHumanFilter, resolveSelectionPlan } from "./human-gate.js";
 import { createRunDir, ensureDir, writeCsv, writeJson, writeReport } from "./io.js";
 import { queryCatalogMcp, queryDesiMcpWithDetails, queryDesiSeedRowsMcpWithDetails } from "./mcp.js";
+import type { DesiQueryDetails } from "./mcp.js";
 import { loadPlaybook } from "./playbook.js";
-import type { CatalogRecord, Coord, Playbook, RunRequest } from "./types.js";
+import { applySelectionPlan } from "./selection.js";
+import type { CatalogRecord, Coord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
 
 interface RunnerOptions {
   configPath: string;
@@ -18,50 +19,15 @@ interface RunnerOptions {
   progress?: (line: string) => void;
 }
 
-interface RunArtifacts {
-  statusJson: string;
-  inputManifestJson: string;
-  euclidQueryCsv?: string;
-  desiQueryCsv?: string;
-  desiOriginJson?: string;
-  desiSearchQueryJson?: string;
-  desiSearchInitialRawJson?: string;
-  desiSearchSampleRawJson?: string;
-  desiSearchRetryRawJson?: string;
-  desiSearchRetrySampleRawJson?: string;
-  crossmatchCsv?: string;
-  previewCsv?: string;
-  previewSummaryJson?: string;
-  filteredCsv?: string;
-  statsJson: string;
-  reportMd: string;
-  resultIndexJson: string;
-  humanGateRequestJson?: string;
-  regionAdjustRequestJson?: string;
-  t1SchemaReportJson?: string;
-  qcReportJson?: string;
-  fieldLineageDocMd?: string;
-  imagePairIndexCsv?: string;
-  mockContinueHandoffJson?: string;
-}
-
-interface RunSummary {
-  mode: "pipeline";
-  raDeg?: number;
-  decDeg?: number;
-  radiusArcsec?: number;
-  topK?: number;
-  desiHits?: number;
-  crossmatchRows?: number;
-  previewRows?: number;
-  filteredRows?: number;
-  availableFilterFields?: string[];
-  previewSample?: Record<string, unknown>[];
-  humanGateMode?: "filter" | "filter_confirm" | "region_adjust" | "mock_continue" | "none";
-  executionMode: "ts_orchestrator";
-  t1RowsWithMissing?: number;
-  imagePairRows?: number;
-  mockChildRunId?: string;
+interface BrickResolveResult {
+  backend?: string;
+  error?: string | null;
+  rows?: Array<{
+    object_id: string;
+    brickid: number | null;
+    brickname: string | null;
+    status?: string;
+  }>;
 }
 
 interface RunStatus {
@@ -85,10 +51,11 @@ interface RunStatus {
     euclid_rows?: number;
     desi_rows?: number;
     desi_hits_total?: number;
-    crossmatch_rows?: number;
+    candidate_pool_rows?: number;
     filtered_rows?: number;
+    selection_candidate_rows?: number;
+    selection_rows?: number;
     t1_rows_with_missing?: number;
-    image_pair_rows?: number;
     mock_child_run_id?: string;
   };
   artifacts?: Record<string, string | null | undefined>;
@@ -99,22 +66,8 @@ interface RunStatus {
 }
 
 function validatePlaybook(playbook: Playbook): void {
-  const required = [
-    "input-router",
-    "coord-extractor",
-    "euclid-query",
-    "desi-query",
-    "crossmatch",
-    "preview-export",
-    "human-filter-gate",
-    "filtered-export"
-  ];
-
-  const existing = new Set(playbook.steps.map((s) => s.id));
-  for (const id of required) {
-    if (!existing.has(id)) {
-      throw new Error(`Playbook missing required step: ${id}`);
-    }
+  if (!Array.isArray(playbook.steps) || playbook.steps.length === 0) {
+    throw new Error("Playbook must contain at least one step.");
   }
 }
 
@@ -174,80 +127,41 @@ function buildMockEuclidRowsForMinimum(
   return out;
 }
 
-function asNonEmpty(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const t = value.trim();
-  return t.length > 0 ? t : null;
-}
-
-function buildImagePairIndexRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  return rows.map((row) => {
-    const euclidPath = asNonEmpty(row.euclid_vis_path_pattern);
-    const desiTractorI = asNonEmpty(row.desi_tractor_i_path);
-    const desiG = asNonEmpty(row.desi_image_g_path);
-    const desiR = asNonEmpty(row.desi_image_r_path);
-    const desiI = asNonEmpty(row.desi_image_i_path);
-    const desiZ = asNonEmpty(row.desi_image_z_path);
-
-    const tileIndex = asNonEmpty(row.tile_index);
-    const brickname = asNonEmpty(row.brickname);
-
-    const euclidFilenameQuery = tileIndex
-      ? `EUC_MER_BGSUB-MOSAIC-VIS_TILE${tileIndex}-*.fits`
-      : null;
-    const desiFilenameTractorI = brickname
-      ? `tractor-i-${brickname}.fits`
-      : null;
-    const desiFilenameG = brickname
-      ? `legacysurvey-${brickname}-image-g.fits.fz`
-      : null;
-    const desiFilenameR = brickname
-      ? `legacysurvey-${brickname}-image-r.fits.fz`
-      : null;
-    const desiFilenameI = brickname
-      ? `legacysurvey-${brickname}-image-i.fits.fz`
-      : null;
-    const desiFilenameZ = brickname
-      ? `legacysurvey-${brickname}-image-z.fits.fz`
-      : null;
-
-    return {
-      obj_id: row.obj_id,
-      tile_index: row.tile_index,
-      brickname: row.brickname,
-      ra: row.ra,
-      dec: row.dec,
-      type: row.type,
-      path_source: row.path_source,
-      lookup_mode: "filename_pattern_by_tile_brickname",
-      lookup_key_tile_index: tileIndex,
-      lookup_key_brickname: brickname,
-      euclid_filename_query: euclidFilenameQuery,
-      desi_filename_tractor_i: desiFilenameTractorI,
-      desi_filename_g: desiFilenameG,
-      desi_filename_r: desiFilenameR,
-      desi_filename_i: desiFilenameI,
-      desi_filename_z: desiFilenameZ,
-      euclid_path: euclidPath,
-      desi_path_tractor_i: desiTractorI,
-      desi_path_g: desiG,
-      desi_path_r: desiR,
-      desi_path_i: desiI,
-      desi_path_z: desiZ,
-      availability_euclid: euclidPath ? "pattern" : "missing",
-      availability_tractor_i: desiTractorI ? "derived" : "missing",
-      availability_g: desiG ? "derived" : "missing",
-      availability_r: desiR ? "derived" : "missing",
-      availability_i: desiI ? "derived" : "missing",
-      availability_z: desiZ ? "derived" : "missing"
-    };
-  });
-}
-
 function toJsonLiteral(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function buildArtifactPathMap(artifacts: RunArtifacts): Record<string, string | null | undefined> {
+  return {
+    status_json: artifacts.statusJson,
+    input_manifest_json: artifacts.inputManifestJson,
+    euclid_query_csv: artifacts.euclidQueryCsv,
+    desi_query_csv: artifacts.desiQueryCsv,
+    desi_origin_json: artifacts.desiOriginJson,
+    desi_search_query_json: artifacts.desiSearchQueryJson,
+    desi_search_initial_raw_json: artifacts.desiSearchInitialRawJson,
+    desi_search_sample_raw_json: artifacts.desiSearchSampleRawJson,
+    desi_search_retry_raw_json: artifacts.desiSearchRetryRawJson,
+    desi_search_retry_sample_raw_json: artifacts.desiSearchRetrySampleRawJson,
+    candidate_pool_csv: artifacts.candidatePoolCsv,
+    preview_csv: artifacts.previewCsv,
+    preview_summary_json: artifacts.previewSummaryJson,
+    filtered_csv: artifacts.filteredCsv,
+    selection_candidates_csv: artifacts.selectionCandidatesCsv,
+    selection_final_csv: artifacts.selectionFinalCsv,
+    selection_report_json: artifacts.selectionReportJson,
+    selection_plan_request_json: artifacts.selectionPlanRequestJson,
+    selection_plan_response_json: artifacts.selectionPlanResponseJson,
+    stats_json: artifacts.statsJson,
+    report_md: artifacts.reportMd,
+    result_index_json: artifacts.resultIndexJson,
+    t1_schema_report_json: artifacts.t1SchemaReportJson,
+    qc_report_json: artifacts.qcReportJson,
+    field_lineage_md: artifacts.fieldLineageDocMd,
+    human_gate_request_json: artifacts.humanGateRequestJson,
+    region_adjust_request_json: artifacts.regionAdjustRequestJson,
+    mock_continue_handoff_json: artifacts.mockContinueHandoffJson
+  };
 }
 
 function runPipelineViaNpm(
@@ -258,8 +172,7 @@ function runPipelineViaNpm(
 ): {
   runId: string;
   runDir: string;
-  imagePairIndexCsv: string;
-  crossmatchCsv: string;
+  candidatePoolCsv: string;
   resultIndexJson: string;
 } {
   const envExpr = Object.entries(envPatch)
@@ -274,19 +187,17 @@ function runPipelineViaNpm(
 
   const runIdMatch = out.match(/Run complete:\s*(\S+)/);
   const runDirMatch = out.match(/Output dir:\s*(\S+)/);
-  const imagePairMatch = out.match(/Image pair index CSV:\s*(\S+)/);
-  const crossmatchMatch = out.match(/Crossmatch CSV:\s*(\S+)/);
+  const candidatePoolMatch = out.match(/Candidate pool CSV:\s*(\S+)/);
   const resultIndexMatch = out.match(/Result index:\s*(\S+)/);
 
-  if (!runIdMatch || !runDirMatch || !imagePairMatch || !crossmatchMatch || !resultIndexMatch) {
+  if (!runIdMatch || !runDirMatch || !candidatePoolMatch || !resultIndexMatch) {
     throw new Error("Mock handoff pipeline run succeeded but required artifact paths were not detected from output.");
   }
 
   return {
     runId: runIdMatch[1],
     runDir: runDirMatch[1],
-    imagePairIndexCsv: imagePairMatch[1],
-    crossmatchCsv: crossmatchMatch[1],
+    candidatePoolCsv: candidatePoolMatch[1],
     resultIndexJson: resultIndexMatch[1]
   };
 }
@@ -295,19 +206,74 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+function resolveDesiBricksForEuclidRows(
+  euclidRows: CatalogRecord[],
+  pythonBin: string,
+  runDir: string
+): { byObjectId: Record<string, { brickid?: number | null; brickname?: string | null }>; reportPath?: string } {
+  const workerPath = path.resolve("py/workers/compute_desi_brick.py");
+  if (!fs.existsSync(workerPath) || euclidRows.length === 0) {
+    return { byObjectId: {} };
+  }
+
+  const inputPath = path.join(runDir, "brick_resolve_request.json");
+  const reportPath = path.join(runDir, "brick_resolve_report.json");
+  const req = euclidRows.map((row) => ({
+    object_id: row.object_id,
+    ra_deg: row.ra_deg,
+    dec_deg: row.dec_deg
+  }));
+  writeJson(inputPath, req);
+
+  try {
+    const cmd = `${toJsonLiteral(pythonBin)} ${toJsonLiteral(workerPath)} --input-json ${toJsonLiteral(inputPath)}`;
+    const out = execSync(cmd, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const parsed = JSON.parse(out) as BrickResolveResult;
+    writeJson(reportPath, parsed);
+
+    const byObjectId: Record<string, { brickid?: number | null; brickname?: string | null }> = {};
+    for (const row of parsed.rows ?? []) {
+      if (!row.object_id || typeof row.object_id !== "string") {
+        continue;
+      }
+      byObjectId[row.object_id] = {
+        brickid: Number.isFinite(row.brickid ?? Number.NaN) ? Number(row.brickid) : null,
+        brickname: typeof row.brickname === "string" && row.brickname.trim().length > 0 ? row.brickname : null
+      };
+    }
+    return { byObjectId, reportPath };
+  } catch (error) {
+    writeJson(reportPath, {
+      backend: "unavailable",
+      error: errorMessage(error),
+      rows: []
+    });
+    return { byObjectId: {}, reportPath };
+  }
+}
+
 function findChildArtifactPath(childResultIndex: Record<string, unknown>, key: string): string | undefined {
   const artifacts = childResultIndex.artifacts;
   if (typeof artifacts !== "object" || artifacts === null) {
     return undefined;
   }
-  const value = (artifacts as Record<string, unknown>)[key];
+  const record = artifacts as Record<string, unknown>;
+  const snake = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+  const value = record[key] ?? record[snake];
   return typeof value === "string" ? value : undefined;
 }
 
 function writeMockContinueRequest(baseRequest: RunRequest, outPath: string): void {
   const nextRequest: RunRequest = {
     ...baseRequest,
-    interaction: "cli"
+    interaction: "cli",
+    workflow: "euclid_desi_crossmatch"
   };
   fs.writeFileSync(outPath, JSON.stringify(nextRequest, null, 2));
 }
@@ -402,6 +368,8 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   progress?.(`Run dir: ${runDir}`);
 
   const interaction = request.interaction ?? config.defaults.interaction_primary;
+  const workflow = (request.workflow ?? "").toString().trim().toLowerCase();
+  const isEuclidSingleWorkflow = options.playbookPath.includes("euclid_cutout");
   const radiusArcsec = request.radiusArcsec ?? playbook.defaults?.radius_arcsec ?? config.defaults.default_radius_arcsec;
   const topK = request.topK ?? playbook.defaults?.top_k ?? config.defaults.top_k;
   const previewRows = request.previewRows ?? playbook.defaults?.preview_rows ?? config.defaults.preview_rows;
@@ -462,13 +430,16 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   progress?.("Execution mode: ts_orchestrator (single pipeline for web/cli)");
   progress?.(`Task: input=${effectiveRequest.input.type}, interaction=${interaction}, backend=${config.runtime.interaction_backend}, radiusArcsec=${radiusArcsec}, topK=${topK}, previewRows=${previewRows}`);
+  if (workflow.length > 0) {
+    progress?.(`Workflow: ${workflow}`);
+  }
   if (effectiveRequest.input.type === "radec_text") {
     progress?.(`Input value (RA/DEC text): ${effectiveRequest.input.value}`);
   } else {
     progress?.(`Input value (s3 uri): ${effectiveRequest.input.value}`);
   }
 
-  step(1, 6, "Extracting coordinate from input");
+  step(1, 7, "Extracting coordinate from input");
   runStatus.current_phase = "extract_coord";
   runStatus.current_step = "extract_coordinate";
   writeRunStatus(statusJson, runStatus);
@@ -483,7 +454,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   progress?.(`Matching params: RA=${coord.ra_deg}, DEC=${coord.dec_deg}, radiusArcsec=${radiusArcsec}, topK=${topK}`);
 
-  step(2, 6, "Preparing Euclid query");
+  step(2, 7, "Preparing Euclid query");
   runStatus.current_phase = "query";
   runStatus.current_step = "query_euclid";
   writeRunStatus(statusJson, runStatus);
@@ -494,11 +465,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   writeRunStatus(statusJson, runStatus);
 
   const retryScale = Number(process.env.DESI_RETRY_SCALE ?? "20");
-  step(3, 6, "Preparing DESI query");
+  step(3, 7, "Preparing DESI query");
   runStatus.current_phase = "query";
   runStatus.current_step = "query_desi";
   writeRunStatus(statusJson, runStatus);
-  progress?.("MCP call (desi): server=astro_k3s_mcp, tool=es_query, mode=search, catalog=desi-dr10-tractor");
   const mcpDir = path.join(runDir, "mcp");
   ensureDir(mcpDir);
   const desiSearchQueryJson = path.join(mcpDir, "desi_search_query.json");
@@ -506,86 +476,145 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const desiSearchSampleRawJson = path.join(mcpDir, "desi_search_sample.raw.json");
   const desiOriginJson = path.join(runDir, "desi_origin.json");
 
-  let desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: 1 });
-  let desiRows = desiDetails.rows;
-  const desiRowsInitial = desiRows.length;
-  const desiHitsTotalInitial = desiDetails.hitsTotal;
+  let desiDetails: DesiQueryDetails = {
+    rows: [],
+    hitsTotal: 0,
+    queryWindow: {
+      ra_min: Number.NaN,
+      ra_max: Number.NaN,
+      dec_min: Number.NaN,
+      dec_max: Number.NaN
+    },
+    queryBody: {},
+    rawPayload: {},
+    samplePayload: {},
+    sampleRows: [],
+    origin: {
+      source_system: "astro_k3s_mcp",
+      catalog: "desi-dr10-tractor",
+      backend_type: "mcp_es_index",
+      storage_hint: "unknown",
+      source_path: null,
+      source_path_field: null,
+      note: "DESI query not executed"
+    }
+  };
+  let desiRows: CatalogRecord[] = [];
+  let desiRowsInitial = 0;
+  let desiHitsTotalInitial = 0;
   let desiRetryApplied = false;
   let desiMockApplied = false;
   let desiMockReason: string | null = null;
   let desiRetryRawJson: string | undefined;
   let desiRetrySampleRawJson: string | undefined;
 
-  writeJson(desiSearchQueryJson, {
-    catalog: "desi-dr10-tractor",
-    mode: "search",
-    window: desiDetails.queryWindow,
-    query_body: desiDetails.queryBody,
-    top_k: topK,
-    query_center: {
-      ra_deg: coord.ra_deg,
-      dec_deg: coord.dec_deg
-    }
-  });
-  writeJson(desiSearchInitialRawJson, desiDetails.rawPayload);
-  writeJson(desiSearchSampleRawJson, desiDetails.samplePayload);
-  writeJson(desiOriginJson, desiDetails.origin);
-
-  progress?.(`DESI hits (initial): rows=${desiRowsInitial}, hits_total=${desiHitsTotalInitial}`);
-  progress?.(`DESI raw response (initial): ${desiSearchInitialRawJson}`);
-  progress?.(`DESI sample response (size=3): ${desiSearchSampleRawJson}`);
-  progress?.(`DESI source metadata: ${desiOriginJson}`);
-  progress?.(`DESI source hint: storage=${desiDetails.origin.storage_hint}, source_path=${desiDetails.origin.source_path ?? "n/a"}`);
-
-  if (desiRows.length === 0 && Number.isFinite(retryScale) && retryScale > 1) {
-    progress?.(`DESI retry: enabled, scale=${retryScale}`);
-    desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: retryScale });
+  if (!isEuclidSingleWorkflow) {
+    progress?.("MCP call (desi): server=astro_k3s_mcp, tool=es_query, mode=search, catalog=desi-dr10-tractor");
+    desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: 1 });
     desiRows = desiDetails.rows;
-    desiRetryRawJson = path.join(mcpDir, "desi_search_retry.raw.json");
-    desiRetrySampleRawJson = path.join(mcpDir, "desi_search_retry_sample.raw.json");
-    writeJson(desiRetryRawJson, desiDetails.rawPayload);
-    writeJson(desiRetrySampleRawJson, desiDetails.samplePayload);
-    writeJson(desiOriginJson, desiDetails.origin);
-    desiRetryApplied = true;
-    progress?.(`DESI hits (retry): rows=${desiRows.length}, hits_total=${desiDetails.hitsTotal}`);
-    progress?.(`DESI raw response (retry): ${desiRetryRawJson}`);
-    progress?.(`DESI sample response (retry,size=3): ${desiRetrySampleRawJson}`);
-  }
+    desiRowsInitial = desiRows.length;
+    desiHitsTotalInitial = desiDetails.hitsTotal;
 
-  if (desiRows.length === 0 && envFlag("DESI_MOCK_ENABLE")) {
-    progress?.("DESI mock fallback: querying seed rows from ES for realistic fields");
-    const seedDetails = await queryDesiSeedRowsMcpWithDetails(topK);
-    const minRows = Math.max(10, Math.floor(envNumber("DESI_MOCK_MIN_CROSSMATCH_ROWS", 10)));
-    euclidRows = buildMockEuclidRowsForMinimum(euclidRows, minRows);
-    const mockRows = buildMockDesiRowsFromSeeds(euclidRows, seedDetails.rows, topK, radiusArcsec);
-    if (mockRows.length > 0) {
-      desiRows = mockRows;
-      desiMockApplied = true;
-      desiMockReason = `DESI_MOCK_ENABLE=true; no overlap rows; seeded from real DESI rows=${seedDetails.rows.length}; min_crossmatch_rows=${minRows}`;
-      writeJson(desiOriginJson, {
-        source_system: "mock",
-        catalog: "desi-dr10-tractor",
-        backend_type: "mock_seeded_from_real_desi",
-        storage_hint: "unknown",
-        source_path: null,
-        source_path_field: null,
-        note: desiMockReason,
-        mock_config: {
-          max_rows: envNumber("DESI_MOCK_MAX_ROWS", topK),
-          jitter_arcsec: envNumber("DESI_MOCK_JITTER_ARCSEC", Math.min(Math.max(radiusArcsec * 0.2, 0.05), 0.8)),
-          min_crossmatch_rows: minRows,
-          tile_index_default: process.env.DESI_MOCK_TILE_INDEX?.trim() || "102018211"
-        },
-        seed_source: {
-          rows: seedDetails.rows.length,
-          hits_total: seedDetails.hitsTotal,
-          note: "Fields cloned from real DESI ES rows; RA/DEC repositioned near Euclid for development"
-        }
-      });
-      progress?.(`DESI mock fallback applied: rows=${desiRows.length}, euclidRows=${euclidRows.length}`);
-    } else {
-      progress?.("DESI mock fallback requested but no DESI seed rows available");
+    writeJson(desiSearchQueryJson, {
+      catalog: "desi-dr10-tractor",
+      mode: "search",
+      window: desiDetails.queryWindow,
+      query_body: desiDetails.queryBody,
+      top_k: topK,
+      query_center: {
+        ra_deg: coord.ra_deg,
+        dec_deg: coord.dec_deg
+      }
+    });
+    writeJson(desiSearchInitialRawJson, desiDetails.rawPayload);
+    writeJson(desiSearchSampleRawJson, desiDetails.samplePayload);
+    writeJson(desiOriginJson, desiDetails.origin);
+
+    progress?.(`DESI hits (initial): rows=${desiRowsInitial}, hits_total=${desiHitsTotalInitial}`);
+    progress?.(`DESI raw response (initial): ${desiSearchInitialRawJson}`);
+    progress?.(`DESI sample response (size=3): ${desiSearchSampleRawJson}`);
+    progress?.(`DESI source metadata: ${desiOriginJson}`);
+    progress?.(`DESI source hint: storage=${desiDetails.origin.storage_hint}, source_path=${desiDetails.origin.source_path ?? "n/a"}`);
+
+    if (desiRows.length === 0 && Number.isFinite(retryScale) && retryScale > 1) {
+      progress?.(`DESI retry: enabled, scale=${retryScale}`);
+      desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: retryScale });
+      desiRows = desiDetails.rows;
+      desiRetryRawJson = path.join(mcpDir, "desi_search_retry.raw.json");
+      desiRetrySampleRawJson = path.join(mcpDir, "desi_search_retry_sample.raw.json");
+      writeJson(desiRetryRawJson, desiDetails.rawPayload);
+      writeJson(desiRetrySampleRawJson, desiDetails.samplePayload);
+      writeJson(desiOriginJson, desiDetails.origin);
+      desiRetryApplied = true;
+      progress?.(`DESI hits (retry): rows=${desiRows.length}, hits_total=${desiDetails.hitsTotal}`);
+      progress?.(`DESI raw response (retry): ${desiRetryRawJson}`);
+      progress?.(`DESI sample response (retry,size=3): ${desiRetrySampleRawJson}`);
     }
+
+    if (desiRows.length === 0 && envFlag("DESI_MOCK_ENABLE")) {
+      progress?.("DESI mock fallback: querying seed rows from ES for realistic fields");
+      const seedDetails = await queryDesiSeedRowsMcpWithDetails(topK);
+      const minRows = Math.max(10, Math.floor(envNumber("DESI_MOCK_MIN_CROSSMATCH_ROWS", 10)));
+      euclidRows = buildMockEuclidRowsForMinimum(euclidRows, minRows);
+      const mockRows = buildMockDesiRowsFromSeeds(euclidRows, seedDetails.rows, topK, radiusArcsec);
+      if (mockRows.length > 0) {
+        desiRows = mockRows;
+        desiMockApplied = true;
+        desiMockReason = `DESI_MOCK_ENABLE=true; no overlap rows; seeded from real DESI rows=${seedDetails.rows.length}; min_crossmatch_rows=${minRows}`;
+        writeJson(desiOriginJson, {
+          source_system: "mock",
+          catalog: "desi-dr10-tractor",
+          backend_type: "mock_seeded_from_real_desi",
+          storage_hint: "unknown",
+          source_path: null,
+          source_path_field: null,
+          note: desiMockReason,
+          mock_config: {
+            max_rows: envNumber("DESI_MOCK_MAX_ROWS", topK),
+            jitter_arcsec: envNumber("DESI_MOCK_JITTER_ARCSEC", Math.min(Math.max(radiusArcsec * 0.2, 0.05), 0.8)),
+            min_crossmatch_rows: minRows,
+            tile_index_default: process.env.DESI_MOCK_TILE_INDEX?.trim() || "102018211"
+          },
+          seed_source: {
+            rows: seedDetails.rows.length,
+            hits_total: seedDetails.hitsTotal,
+            note: "Fields cloned from real DESI ES rows; RA/DEC repositioned near Euclid for development"
+          }
+        });
+        progress?.(`DESI mock fallback applied: rows=${desiRows.length}, euclidRows=${euclidRows.length}`);
+      } else {
+        progress?.("DESI mock fallback requested but no DESI seed rows available");
+      }
+    }
+  } else {
+    writeJson(desiSearchQueryJson, {
+      catalog: "desi-dr10-tractor",
+      mode: "skipped",
+      reason: "euclid_cutout workflow",
+      top_k: topK,
+      query_center: {
+        ra_deg: coord.ra_deg,
+        dec_deg: coord.dec_deg
+      }
+    });
+    writeJson(desiSearchInitialRawJson, {
+      skipped: true,
+      reason: "euclid_cutout workflow"
+    });
+    writeJson(desiSearchSampleRawJson, {
+      skipped: true,
+      reason: "euclid_cutout workflow"
+    });
+    writeJson(desiOriginJson, {
+      source_system: "not_used",
+      catalog: "desi-dr10-tractor",
+      backend_type: "skipped_for_single_catalog_workflow",
+      storage_hint: "unknown",
+      source_path: null,
+      source_path_field: null,
+      note: "DESI query is skipped for euclid_cutout workflow; DESI paths are derived from RA/DEC -> brickname."
+    });
+    progress?.("DESI query skipped for euclid_cutout workflow");
   }
 
   runStatus.metrics = {
@@ -595,20 +624,33 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   };
   writeRunStatus(statusJson, runStatus);
 
-  step(4, 6, "Running crossmatch");
+  step(4, 7, isEuclidSingleWorkflow ? "Building candidate pool" : "Running crossmatch");
   runStatus.current_phase = "crossmatch";
   runStatus.current_step = "crossmatch_catalogs";
   writeRunStatus(statusJson, runStatus);
-  const crossmatched = crossmatchCatalogs(euclidRows, desiRows, radiusArcsec, {
-    ra_deg: coord.ra_deg,
-    dec_deg: coord.dec_deg
-  });
-  const requiredT1Fields = ["obj_id", "ra", "dec", "type", "tile_index", "brickname", "maskbits", "mag_proxy", "seg_area"] as const;
+  const brickResolve = isEuclidSingleWorkflow
+    ? resolveDesiBricksForEuclidRows(euclidRows, config.runtime.python_bin, runDir)
+    : { byObjectId: {} as Record<string, { brickid?: number | null; brickname?: string | null }>, reportPath: undefined as string | undefined };
+
+  const crossmatched = isEuclidSingleWorkflow
+    ? buildCandidatePoolFromEuclidOnly(
+      euclidRows,
+      {
+        ra_deg: coord.ra_deg,
+        dec_deg: coord.dec_deg
+      },
+      radiusArcsec,
+      { byObjectId: brickResolve.byObjectId }
+    )
+    : crossmatchCatalogs(euclidRows, desiRows, radiusArcsec, {
+      ra_deg: coord.ra_deg,
+      dec_deg: coord.dec_deg
+    });
+  const requiredT1Fields = ["obj_id", "ra", "dec", "tile_index", "brickname", "maskbits", "mag_proxy", "seg_area"] as const;
   const t1MissingCounts: Record<string, number> = {
     obj_id: 0,
     ra: 0,
     dec: 0,
-    type: 0,
     tile_index: 0,
     brickname: 0,
     maskbits: 0,
@@ -625,9 +667,6 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     }
     if (!Number.isFinite(row.dec)) {
       t1MissingCounts.dec += 1;
-    }
-    if (!row.type || row.type.trim() === "") {
-      t1MissingCounts.type += 1;
     }
     if (row.tile_index === null || row.tile_index.trim() === "") {
       t1MissingCounts.tile_index += 1;
@@ -648,8 +687,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   const euclidQueryCsv = path.join(runDir, "euclid_query.csv");
   const desiQueryCsv = path.join(runDir, "desi_query.csv");
-  const crossmatchCsv = path.join(runDir, "crossmatch.csv");
-  const imagePairIndexCsv = path.join(runDir, "image_pair_index.csv");
+  const candidatePoolCsv = path.join(runDir, "candidate_pool.csv");
   const previewCsv = path.join(runDir, `preview_${previewRows}.csv`);
   const previewSummaryJson = path.join(runDir, "preview_summary.json");
   const filteredCsv = path.join(runDir, "filtered.csv");
@@ -678,6 +716,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       total_rows: crossmatched.length,
       rows_with_missing: t1RowsWithMissing,
       missing_counts: t1MissingCounts
+    },
+    enrichment: {
+      brick_resolve_report: brickResolve.reportPath ?? null
     }
   });
   writeReport(fieldLineageDocMd, [
@@ -693,14 +734,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "| obj_id | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query | `data.result.hits.hits[*]._source` | `OBJECT_ID` \| `object_id` \| `_id` | direct string mapping | fallback to Euclid `OBJECT_ID` |",
     "| ra | DESI | astro_k3s_mcp.es_query | `..._source` | `ra` | numeric cast | none |",
     "| dec | DESI | astro_k3s_mcp.es_query | `..._source` | `dec` | numeric cast | none |",
-    "| type | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI: `type`; Euclid: `TYPE`/`EXTENDED_FLAG` | normalized string | `unknown` |",
+    "| type | DESI preferred / Euclid optional | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI: `type`; Euclid: `TYPE` (if exists) | normalized string | `null` (single-Euclid keeps unknown as null) |",
     "| tile_index | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `_source` / objects[] | `TILE_INDEX` \| `tile_index` \| `TILEID` | direct string mapping | `null` + reason `tile_index_missing` |",
     "| brickname | DESI | astro_k3s_mcp.es_query | `_source` | `brickname` | direct string mapping | `null` + reason `brickname_missing` |",
     "| maskbits | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI `maskbits`; Euclid `MASKBITS` | numeric cast | `null` + reason `maskbits_missing` |",
     "| mag_proxy | DESI preferred / Euclid fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | DESI `flux_r`/`mag_*`; Euclid `FLUX_VIS_1FWHM_APER`/`MAG_*` | DESI: `22.5-2.5log10(flux_r)`; Euclid: `23.9-2.5log10(flux_vis_1fwhm_aper)` | `null` + reason `mag_proxy_missing` |",
     "| seg_area | Euclid preferred / DESI fallback | astro_k3s_mcp.es_query + euclid-catalog.get_catalog_objects | `_source` / objects[] | `SEGMENTATION_AREA` \| `seg_area` | numeric cast | `null` + reason `seg_area_missing` |",
     "",
-    "## Additional Leveraged Fields (now included in crossmatch.csv)",
+    "## Additional Leveraged Fields (now included in candidate_pool.csv)",
     "",
     "| output field | source catalog | mcp server/tool | source field | note |",
     "| --- | --- | --- | --- | --- |",
@@ -712,10 +753,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "| euclid_point_like_flag/euclid_extended_flag | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `POINT_LIKE_FLAG`,`EXTENDED_FLAG` | Euclid morphology flags |",
     "| euclid_semimajor_axis | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `SEMIMAJOR_AXIS` | size proxy |",
     "| euclid_flux_vis_* | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | `FLUX_VIS_1/2/3/4FWHM_APER`,`FLUX_VIS_PSF`,`FLUX_VIS_SERSIC` | photometric proxies |",
+    "| RIGHT_ASCENSION/DECLINATION/SEMIMAJOR_AXIS/SEGMENTATION_AREA/FLUX_SEGMENTATION/FLUX_VIS_1..4FWHM_APER | Euclid | astro_k3s_mcp.es_query / euclid-catalog.get_catalog_objects | exact uppercase schema fields | copied to candidate_pool when available |",
     "| tile_index_source | derived | orchestrator | n/a | `euclid.tile_index` or `pending_ra_dec_to_tile_mapping` |",
     "| mag_proxy_source | derived | orchestrator | n/a | records which upstream field was used |",
     "| euclid_vis_path_pattern | derived | orchestrator | n/a | IRSA Euclid VIS BGSUB path pattern from `tile_index` |",
-    "| desi_tractor_i_path / desi_image_*_path | derived | orchestrator | n/a | NERSC DR10 south paths from `brickname` |",
+    "| desi_tractor_i_path / desi_image_*_path | derived | orchestrator + py/workers/compute_desi_brick.py | n/a | NERSC DR10 south paths from `brickname` (computed by desiutil.brick when available) |",
     "| path_source | derived | orchestrator | n/a | `derived` for normal rows, `mock` for DESI_MOCK seeded rows |",
     "",
     "## Current Known Gaps",
@@ -730,11 +772,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- Euclid rows snapshot: ${euclidQueryCsv}`,
     `- DESI rows snapshot: ${desiQueryCsv}`,
     `- T1 schema report: ${t1SchemaReportJson}`,
-    `- QC report: ${qcReportJson}`
+    `- QC report: ${qcReportJson}`,
+    `- Brick resolve report: ${brickResolve.reportPath ?? "n/a"}`
   ]);
 
   const crossmatchTruncated = crossmatched.slice(0, maxResultRows);
-  const imagePairRows = buildImagePairIndexRows(crossmatchTruncated as unknown as Record<string, unknown>[]);
   const preview = crossmatchTruncated.slice(0, previewRows);
   const previewSample = preview.slice(0, 10) as unknown as Record<string, unknown>[];
   const availableFilterFields = crossmatchTruncated.length > 0
@@ -743,7 +785,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
   writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
-  writeCsv(crossmatchCsv, crossmatchTruncated as unknown as Record<string, unknown>[], [
+  writeCsv(candidatePoolCsv, crossmatchTruncated as unknown as Record<string, unknown>[], [
     "match_rank",
     "center_ra",
     "center_dec",
@@ -753,6 +795,16 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "ra",
     "dec",
     "type",
+    "RIGHT_ASCENSION",
+    "DECLINATION",
+    "SEMIMAJOR_AXIS",
+    "SEGMENTATION_AREA",
+    "FLUX_SEGMENTATION",
+    "FLUX_VIS_1FWHM_APER",
+    "FLUX_VIS_2FWHM_APER",
+    "FLUX_VIS_3FWHM_APER",
+    "FLUX_VIS_4FWHM_APER",
+    "tile_id",
     "tile_index",
     "brickname",
     "maskbits",
@@ -804,61 +856,35 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "euclid_flux_vis_4fwhm_aper",
     "euclid_flux_vis_psf",
     "euclid_flux_vis_sersic",
+    "euclid_fits_path",
     "euclid_vis_path_pattern",
+    "desi_tractor_i_fits_path",
     "desi_tractor_i_path",
+    "desi_fits_g_path",
     "desi_image_g_path",
+    "desi_fits_r_path",
     "desi_image_r_path",
+    "desi_fits_i_path",
     "desi_image_i_path",
+    "desi_fits_z_path",
     "desi_image_z_path",
     "path_source",
     "missing_reasons"
   ]);
-  writeCsv(imagePairIndexCsv, imagePairRows, [
-    "obj_id",
-    "tile_index",
-    "brickname",
-    "ra",
-    "dec",
-    "type",
-    "path_source",
-    "lookup_mode",
-    "lookup_key_tile_index",
-    "lookup_key_brickname",
-    "euclid_filename_query",
-    "desi_filename_tractor_i",
-    "desi_filename_g",
-    "desi_filename_r",
-    "desi_filename_i",
-    "desi_filename_z",
-    "euclid_path",
-    "desi_path_tractor_i",
-    "desi_path_g",
-    "desi_path_r",
-    "desi_path_i",
-    "desi_path_z",
-    "availability_euclid",
-    "availability_tractor_i",
-    "availability_g",
-    "availability_r",
-    "availability_i",
-    "availability_z"
-  ]);
   writeCsv(previewCsv, preview as unknown as Record<string, unknown>[]);
   writeJson(previewSummaryJson, {
     run_id: runId,
-    crossmatch_rows: crossmatchTruncated.length,
+    candidate_pool_rows: crossmatchTruncated.length,
     preview_rows: preview.length,
     available_filter_fields: availableFilterFields,
     preview_sample: previewSample
   });
 
-  progress?.(`Crossmatch rows: ${crossmatchTruncated.length}`);
-  progress?.(`Image pair index rows: ${imagePairRows.length}`);
+  progress?.(`Candidate pool rows: ${crossmatchTruncated.length}`);
   progress?.(`Preview rows: ${preview.length}`);
   runStatus.metrics = {
     ...(runStatus.metrics ?? {}),
-    crossmatch_rows: crossmatchTruncated.length,
-    image_pair_rows: imagePairRows.length,
+    candidate_pool_rows: crossmatchTruncated.length,
     t1_rows_with_missing: t1RowsWithMissing
   };
   runStatus.artifacts = {
@@ -868,30 +894,35 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   };
   writeRunStatus(statusJson, runStatus);
 
-  step(5, 6, "Resolving human gate");
+  step(5, 7, "Resolving zero-result gate");
   runStatus.current_phase = "human_gate";
-  runStatus.current_step = "resolve_filter_gate";
+  runStatus.current_step = "resolve_zero_result_gate";
   writeRunStatus(statusJson, runStatus);
 
-  const humanGate = await resolveHumanFilter(
-    runDir,
-    interaction,
-    config.runtime.interaction_backend,
-    {
-      runId,
-      crossmatchRows: crossmatchTruncated.length,
-      desiRows: desiRows.length,
-      retryApplied: desiRetryApplied,
-      retryScale,
-      queryCenter: {
-        ra_deg: coord.ra_deg,
-        dec_deg: coord.dec_deg
-      },
-      availableFields: availableFilterFields,
-      previewSample
-    },
-    effectiveRequest.filter
-  );
+  const humanGate = crossmatchTruncated.length === 0
+    ? await resolveHumanFilter(
+      runDir,
+      interaction,
+      config.runtime.interaction_backend,
+      {
+        runId,
+        candidatePoolRows: crossmatchTruncated.length,
+        desiRows: desiRows.length,
+        retryApplied: desiRetryApplied,
+        retryScale,
+        queryCenter: {
+          ra_deg: coord.ra_deg,
+          dec_deg: coord.dec_deg
+        },
+        availableFields: availableFilterFields,
+        previewSample
+      }
+    )
+    : { mode: "none" as const };
+
+  if (crossmatchTruncated.length > 0) {
+    progress?.("Zero-result gate skipped: candidate pool has rows; proceeding to six-condition selection");
+  }
 
   const mockContinueHandoffJson = path.join(runDir, "mock_continue_handoff.json");
   if (humanGate.mode === "mock_continue") {
@@ -918,9 +949,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     const childFilteredCsvPath = findChildArtifactPath(childResultIndex, "filteredCsv");
     const childStatsJsonPath = findChildArtifactPath(childResultIndex, "statsJson");
     const childReportMdPath = findChildArtifactPath(childResultIndex, "reportMd");
+    const childSelectionCandidatesPath = findChildArtifactPath(childResultIndex, "selectionCandidatesCsv");
+    const childSelectionFinalPath = findChildArtifactPath(childResultIndex, "selectionFinalCsv");
+    const childSelectionReportPath = findChildArtifactPath(childResultIndex, "selectionReportJson");
+    const childSelectionPlanRequestPath = findChildArtifactPath(childResultIndex, "selectionPlanRequestJson");
+    const childSelectionPlanResponsePath = findChildArtifactPath(childResultIndex, "selectionPlanResponseJson");
 
     const childPreviewSummary = childPreviewSummaryPath ? readJsonFile(childPreviewSummaryPath) : {};
-    const childCrossmatchRows = Number(childPreviewSummary.crossmatch_rows ?? 0);
+    const childCandidatePoolRows = Number(childPreviewSummary.candidate_pool_rows ?? 0);
     const childPreviewRows = Number(childPreviewSummary.preview_rows ?? 0);
     const childAvailableFields = Array.isArray(childPreviewSummary.available_filter_fields)
       ? childPreviewSummary.available_filter_fields.map((v) => String(v))
@@ -935,8 +971,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       child_run_id: child.runId,
       child_run_dir: child.runDir,
       handoff_artifacts: {
-        crossmatch_csv: child.crossmatchCsv,
-        image_pair_index_csv: child.imagePairIndexCsv,
+        candidate_pool_csv: child.candidatePoolCsv,
         preview_summary_json: childPreviewSummaryPath ?? null,
         preview_csv: childPreviewCsvPath ?? null,
         filtered_csv: childFilteredCsvPath ?? null,
@@ -945,7 +980,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
         result_index_json: child.resultIndexJson
       },
       handoff_preview: {
-        crossmatch_rows: childCrossmatchRows,
+        candidate_pool_rows: childCandidatePoolRows,
         preview_rows: childPreviewRows,
         available_filter_fields: childAvailableFields,
         preview_sample: childPreviewSample
@@ -964,7 +999,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       },
       child_run_id: child.runId,
       child_run_dir: child.runDir,
-      child_crossmatch_rows: childCrossmatchRows,
+      child_candidate_pool_rows: childCandidatePoolRows,
       child_preview_rows: childPreviewRows,
       artifact_paths: {
         status_json: statusJson,
@@ -991,8 +1026,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       "- human_gate_mode: mock_continue",
       `- child_run_id: ${child.runId}`,
       `- child_run_dir: ${child.runDir}`,
-      `- child_crossmatch_csv: ${child.crossmatchCsv}`,
-      `- child_image_pair_index_csv: ${child.imagePairIndexCsv}`,
+      `- child_candidate_pool_csv: ${child.candidatePoolCsv}`,
       `- child_preview_summary_json: ${childPreviewSummaryPath ?? "n/a"}`,
       `- child_preview_csv: ${childPreviewCsvPath ?? "n/a"}`,
       `- child_filtered_csv: ${childFilteredCsvPath ?? "n/a"}`,
@@ -1003,14 +1037,32 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       `- result_index_json: ${resultIndexJson}`
     ]);
 
+    const handoffSelectionReportJson = path.join(runDir, "selection_report.json");
+    writeJson(handoffSelectionReportJson, {
+      run_id: runId,
+      mode: "mock_continue_handoff",
+      note: "Selection outputs are inherited from child run when available.",
+      child_run_id: child.runId,
+      child_run_dir: child.runDir,
+      child_candidate_pool_rows: childCandidatePoolRows,
+      child_preview_rows: childPreviewRows,
+      child_selection_candidates_csv: childSelectionCandidatesPath ?? null,
+      child_selection_final_csv: childSelectionFinalPath ?? null,
+      child_selection_report_json: childSelectionReportPath ?? null
+    });
+
     const handoffArtifacts: RunArtifacts = {
       statusJson,
       inputManifestJson,
-      crossmatchCsv: child.crossmatchCsv,
-      imagePairIndexCsv: child.imagePairIndexCsv,
+      candidatePoolCsv: child.candidatePoolCsv,
       previewCsv: childPreviewCsvPath,
       previewSummaryJson: childPreviewSummaryPath,
       filteredCsv: childFilteredCsvPath,
+      selectionCandidatesCsv: childSelectionCandidatesPath,
+      selectionFinalCsv: childSelectionFinalPath,
+      selectionReportJson: handoffSelectionReportJson,
+      selectionPlanRequestJson: childSelectionPlanRequestPath,
+      selectionPlanResponseJson: childSelectionPlanResponsePath,
       statsJson,
       reportMd,
       resultIndexJson,
@@ -1023,11 +1075,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       decDeg: coord.dec_deg,
       radiusArcsec,
       topK,
-      desiHits: childCrossmatchRows,
-      crossmatchRows: childCrossmatchRows,
-      imagePairRows: childCrossmatchRows,
+      desiHits: childCandidatePoolRows,
+      candidatePoolRows: childCandidatePoolRows,
       previewRows: childPreviewRows,
-      filteredRows: childCrossmatchRows,
+      filteredRows: childCandidatePoolRows,
       availableFilterFields: childAvailableFields,
       previewSample: childPreviewSample,
       humanGateMode: "mock_continue",
@@ -1041,23 +1092,21 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       mode: "mock_continue_handoff",
       child_run_id: child.runId,
       child_run_dir: child.runDir,
-      crossmatch_rows: childCrossmatchRows,
-      image_pair_rows: childCrossmatchRows,
+      candidate_pool_rows: childCandidatePoolRows,
       preview_rows: childPreviewRows,
-      desi_rows: childCrossmatchRows,
-      zero_result: childCrossmatchRows === 0,
+      desi_rows: childCandidatePoolRows,
+      zero_result: childCandidatePoolRows === 0,
       available_filter_fields: childAvailableFields,
       preview_sample: childPreviewSample,
       human_gate_mode: "mock_continue",
       artifacts: {
-        ...handoffArtifacts,
+        ...buildArtifactPathMap(handoffArtifacts),
         childResultIndexJson: child.resultIndexJson
       },
       handoff_artifacts: {
         mock_continue_handoff_json: mockContinueHandoffJson,
         child_result_index_json: child.resultIndexJson,
-        child_crossmatch_csv: child.crossmatchCsv,
-        child_image_pair_index_csv: child.imagePairIndexCsv,
+        child_candidate_pool_csv: child.candidatePoolCsv,
         child_preview_summary_json: childPreviewSummaryPath,
         child_preview_csv: childPreviewCsvPath,
         child_filtered_csv: childFilteredCsvPath
@@ -1075,8 +1124,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     writeRunStatus(statusJson, runStatus);
 
     progress?.(`Mock handoff child run: ${child.runId}`);
-    progress?.(`Mock handoff artifacts: crossmatch=${child.crossmatchCsv}`);
-    progress?.(`Mock handoff artifacts: image_pair_index=${child.imagePairIndexCsv}`);
+    progress?.(`Mock handoff artifacts: candidate_pool=${child.candidatePoolCsv}`);
     if (childPreviewSummaryPath) {
       progress?.(`Mock handoff artifacts: preview_summary=${childPreviewSummaryPath}`);
     }
@@ -1090,8 +1138,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     runStatus.current_step = "mock_continue_handoff";
     runStatus.artifacts = {
       ...(runStatus.artifacts ?? {}),
-      crossmatch_csv: child.crossmatchCsv,
-      image_pair_index_csv: child.imagePairIndexCsv,
+      candidate_pool_csv: child.candidatePoolCsv,
       preview_summary_json: childPreviewSummaryPath,
       preview_csv: childPreviewCsvPath,
       filtered_csv: childFilteredCsvPath,
@@ -1111,14 +1158,64 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     };
   }
 
-  const filtered = applyFilter(crossmatchTruncated, humanGate.filter);
+  step(6, 7, "Selection and filtering");
+  runStatus.current_phase = "selection";
+  runStatus.current_step = "apply_selection";
+  writeRunStatus(statusJson, runStatus);
+
+  const selectionCandidatesCsv = path.join(runDir, "selection_candidates.csv");
+  const selectionFinalCsv = path.join(runDir, "selection_final.csv");
+  const selectionReportJson = path.join(runDir, "selection_report.json");
+
+  const selectionGate = await resolveSelectionPlan(
+    runDir,
+    interaction,
+    config.runtime.interaction_backend,
+    {
+      runId,
+      candidatePoolRows: crossmatchTruncated.length,
+      previewSample
+    },
+    effectiveRequest.selection
+  );
+
+  const selectionResult = applySelectionPlan(crossmatchTruncated, selectionGate.plan);
+  writeCsv(selectionCandidatesCsv, selectionResult.candidate_rows_after_quality as unknown as Record<string, unknown>[]);
+  writeCsv(selectionFinalCsv, selectionResult.selected_rows as unknown as Record<string, unknown>[]);
+  writeJson(selectionReportJson, {
+    run_id: runId,
+    mode: selectionGate.mode,
+    request_file: selectionGate.requestFile ?? null,
+    response_file: selectionGate.responseFile ?? null,
+    requested_conditions: selectionResult.requested_conditions,
+    effective_order: selectionResult.effective_order,
+    step_logs: selectionResult.steps,
+    candidate_rows_after_quality: selectionResult.candidate_rows_after_quality.length,
+    final_selected_rows: selectionResult.selected_rows.length
+  });
+
+  const filtered = selectionResult.selected_rows;
   writeCsv(filteredCsv, filtered as unknown as Record<string, unknown>[]);
 
+  progress?.(`Selection mode: ${selectionGate.mode}`);
+  progress?.(`Selection order: ${selectionResult.effective_order.join(" -> ") || "none"}`);
+  progress?.(`Selection candidates rows: ${selectionResult.candidate_rows_after_quality.length}`);
+  progress?.(`Selection final rows: ${selectionResult.selected_rows.length}`);
   progress?.(`Human gate mode: ${humanGate.mode}`);
-  progress?.(`Filtered rows: ${filtered.length}`);
+  progress?.(`Final rows: ${filtered.length}`);
   runStatus.metrics = {
     ...(runStatus.metrics ?? {}),
+    selection_candidate_rows: selectionResult.candidate_rows_after_quality.length,
+    selection_rows: selectionResult.selected_rows.length,
     filtered_rows: filtered.length
+  };
+  runStatus.artifacts = {
+    ...(runStatus.artifacts ?? {}),
+    selection_plan_request_json: selectionGate.requestFile,
+    selection_plan_response_json: selectionGate.responseFile,
+    selection_candidates_csv: selectionCandidatesCsv,
+    selection_final_csv: selectionFinalCsv,
+    selection_report_json: selectionReportJson
   };
   writeRunStatus(statusJson, runStatus);
 
@@ -1138,9 +1235,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     desi_retry_scale: desiRetryApplied ? retryScale : null,
     desi_mock_applied: desiMockApplied,
     desi_mock_reason: desiMockReason,
-    crossmatch_rows_total: crossmatched.length,
-    crossmatch_rows_written: crossmatchTruncated.length,
-    image_pair_rows: imagePairRows.length,
+    candidate_pool_rows_total: crossmatched.length,
+    candidate_pool_rows_written: crossmatchTruncated.length,
+    selection_candidate_rows: selectionResult.candidate_rows_after_quality.length,
+    selection_rows: selectionResult.selected_rows.length,
     filtered_rows: filtered.length,
     truncated: crossmatched.length > maxResultRows,
     human_gate_mode: humanGate.mode,
@@ -1151,28 +1249,48 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       missing_counts: t1MissingCounts,
       report_json: t1SchemaReportJson
     },
-    filter: humanGate.filter ?? null,
-    artifact_paths: {
-      status_json: statusJson,
-      input_manifest_json: inputManifestJson,
-      euclid_query_csv: euclidQueryCsv,
-      desi_query_csv: desiQueryCsv,
-      desi_origin_json: desiOriginJson,
-      desi_search_query_json: desiSearchQueryJson,
-      desi_search_initial_raw_json: desiSearchInitialRawJson,
-      desi_search_sample_raw_json: desiSearchSampleRawJson,
-      desi_search_retry_raw_json: desiRetryRawJson ?? null,
-      desi_search_retry_sample_raw_json: desiRetrySampleRawJson ?? null,
-      crossmatch_csv: crossmatchCsv,
-      image_pair_index_csv: imagePairIndexCsv,
-      preview_csv: previewCsv,
-      preview_summary_json: previewSummaryJson,
-      filtered_csv: filteredCsv,
-      report_md: reportMd,
-      t1_schema_report_json: t1SchemaReportJson,
-      qc_report_json: qcReportJson,
-      field_lineage_md: fieldLineageDocMd
-    }
+    selection: {
+      mode: selectionGate.mode,
+      request_file: selectionGate.requestFile ?? null,
+      response_file: selectionGate.responseFile ?? null,
+      requested_conditions: selectionResult.requested_conditions,
+      effective_order: selectionResult.effective_order,
+      candidate_rows_after_quality: selectionResult.candidate_rows_after_quality.length,
+      final_rows: selectionResult.selected_rows.length
+    },
+    filter: null,
+    enrichment: {
+      brick_resolve_report: brickResolve.reportPath ?? null
+    },
+    artifact_paths: buildArtifactPathMap({
+      statusJson,
+      inputManifestJson,
+      euclidQueryCsv,
+      desiQueryCsv,
+      desiOriginJson,
+      desiSearchQueryJson,
+      desiSearchInitialRawJson,
+      desiSearchSampleRawJson,
+      desiSearchRetryRawJson: desiRetryRawJson,
+      desiSearchRetrySampleRawJson: desiRetrySampleRawJson,
+      candidatePoolCsv,
+      previewCsv,
+      previewSummaryJson,
+      filteredCsv,
+      selectionCandidatesCsv,
+      selectionFinalCsv,
+      selectionReportJson,
+      selectionPlanRequestJson: selectionGate.requestFile,
+      selectionPlanResponseJson: selectionGate.responseFile,
+      statsJson,
+      reportMd,
+      resultIndexJson,
+      t1SchemaReportJson,
+      qcReportJson,
+      fieldLineageDocMd,
+      humanGateRequestJson: undefined,
+      regionAdjustRequestJson: humanGate.mode === "region_adjust" ? humanGate.requestFile : undefined
+    })
   };
   writeJson(statsJson, stats);
 
@@ -1187,34 +1305,41 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     desiSearchSampleRawJson,
     desiSearchRetryRawJson: desiRetryRawJson,
     desiSearchRetrySampleRawJson: desiRetrySampleRawJson,
-    crossmatchCsv,
-    imagePairIndexCsv,
+    candidatePoolCsv,
     previewCsv,
     previewSummaryJson,
     filteredCsv,
+    selectionCandidatesCsv,
+    selectionFinalCsv,
+    selectionReportJson,
+    selectionPlanRequestJson: selectionGate.requestFile,
+    selectionPlanResponseJson: selectionGate.responseFile,
     statsJson,
     reportMd,
     resultIndexJson,
     t1SchemaReportJson,
     qcReportJson,
     fieldLineageDocMd,
-    humanGateRequestJson: humanGate.mode !== "region_adjust" ? humanGate.requestFile : undefined,
+    humanGateRequestJson: undefined,
     regionAdjustRequestJson: humanGate.mode === "region_adjust" ? humanGate.requestFile : undefined
   };
 
   writeJson(resultIndexJson, {
     run_id: runId,
     output_dir: runDir,
-    crossmatch_rows: crossmatchTruncated.length,
-    image_pair_rows: imagePairRows.length,
+    candidate_pool_rows: crossmatchTruncated.length,
+    selection_candidate_rows: selectionResult.candidate_rows_after_quality.length,
+    selection_rows: selectionResult.selected_rows.length,
     preview_rows: preview.length,
     desi_rows: desiRows.length,
     zero_result: crossmatchTruncated.length === 0,
     available_filter_fields: availableFilterFields,
-    artifacts
+    selection_mode: selectionGate.mode,
+    selection_effective_order: selectionResult.effective_order,
+    artifacts: buildArtifactPathMap(artifacts)
   });
 
-  step(6, 6, "Writing final report");
+  step(7, 7, "Writing final report");
   runStatus.current_phase = "finalize";
   runStatus.current_step = "write_artifacts";
   writeRunStatus(statusJson, runStatus);
@@ -1236,21 +1361,23 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- desi_source_storage_hint: ${desiDetails.origin.storage_hint}`,
     `- desi_source_path: ${desiDetails.origin.source_path ?? "n/a"}`,
     `- match_strategy: best_per_euclid (single nearest match within radius)`,
-    `- filter_note: filtering only narrows current crossmatch rows; it cannot increase row count`,
+    `- filter_note: filtering only narrows current candidate pool rows; it cannot increase row count`,
     `- desi_retry_applied: ${desiRetryApplied ? "yes" : "no"}`,
     `- desi_retry_scale: ${desiRetryApplied ? retryScale : "n/a"}`,
     `- desi_mock_applied: ${desiMockApplied ? "yes" : "no"}`,
     `- desi_mock_reason: ${desiMockReason ?? "n/a"}`,
-    `- crossmatch_rows_total: ${crossmatched.length}`,
-    `- crossmatch_rows_written: ${crossmatchTruncated.length}`,
-    `- image_pair_rows: ${imagePairRows.length}`,
+    `- candidate_pool_rows_total: ${crossmatched.length}`,
+    `- candidate_pool_rows_written: ${crossmatchTruncated.length}`,
+    `- selection_mode: ${selectionGate.mode}`,
+    `- selection_order: ${selectionResult.effective_order.join(" -> ") || "none"}`,
+    `- selection_candidates_rows: ${selectionResult.candidate_rows_after_quality.length}`,
+    `- selection_final_rows: ${selectionResult.selected_rows.length}`,
     `- preview_file: preview_${previewRows}.csv`,
     `- preview_rows_written: ${preview.length}`,
-    `- filtered_rows: ${filtered.length}`,
-    `- filter_applied: ${humanGate.filter ? "yes" : "no"}`,
+    `- final_rows: ${filtered.length}`,
+    "- filter_applied: no (selection-only mode)",
     `- human_gate_mode: ${humanGate.mode}`,
-    `- crossmatch_csv: ${crossmatchCsv}`,
-    `- image_pair_index_csv: ${imagePairIndexCsv}`,
+    `- candidate_pool_csv: ${candidatePoolCsv}`,
     `- desi_origin_json: ${desiOriginJson}`,
     `- desi_search_query_json: ${desiSearchQueryJson}`,
     `- desi_search_initial_raw_json: ${desiSearchInitialRawJson}`,
@@ -1261,13 +1388,18 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- preview_csv: ${previewCsv}`,
     `- preview_summary_json: ${previewSummaryJson}`,
     `- filtered_csv: ${filteredCsv}`,
+    `- selection_candidates_csv: ${selectionCandidatesCsv}`,
+    `- selection_final_csv: ${selectionFinalCsv}`,
+    `- selection_report_json: ${selectionReportJson}`,
+    `- selection_plan_request_json: ${selectionGate.requestFile ?? "n/a"}`,
+    `- selection_plan_response_json: ${selectionGate.responseFile ?? "n/a"}`,
     `- result_index_json: ${resultIndexJson}`,
     `- input_manifest_json: ${inputManifestJson}`,
     `- t1_schema_report_json: ${t1SchemaReportJson}`,
     `- qc_report_json: ${qcReportJson}`,
     `- field_lineage_md: ${fieldLineageDocMd}`,
     `- region_adjust_request: ${artifacts.regionAdjustRequestJson ?? "n/a"}`,
-    `- human_filter_request: ${artifacts.humanGateRequestJson ?? "n/a"}`
+    `- brick_resolve_report: ${brickResolve.reportPath ?? "n/a"}`
   ]);
 
   const summary: RunSummary = {
@@ -1277,8 +1409,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     radiusArcsec,
     topK,
     desiHits: desiRows.length,
-    crossmatchRows: crossmatchTruncated.length,
-    imagePairRows: imagePairRows.length,
+    candidatePoolRows: crossmatchTruncated.length,
     previewRows: preview.length,
     filteredRows: filtered.length,
     t1RowsWithMissing,
@@ -1291,32 +1422,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   runStatus.state = "completed";
   runStatus.current_phase = "completed";
   runStatus.current_step = "done";
-  runStatus.artifacts = {
-    status_json: statusJson,
-    input_manifest_json: inputManifestJson,
-    desi_origin_json: desiOriginJson,
-    desi_search_query_json: desiSearchQueryJson,
-    desi_search_initial_raw_json: desiSearchInitialRawJson,
-    desi_search_sample_raw_json: desiSearchSampleRawJson,
-    desi_search_retry_raw_json: desiRetryRawJson,
-    desi_search_retry_sample_raw_json: desiRetrySampleRawJson,
-    crossmatch_csv: crossmatchCsv,
-    image_pair_index_csv: imagePairIndexCsv,
-    preview_csv: previewCsv,
-    preview_summary_json: previewSummaryJson,
-    filtered_csv: filteredCsv,
-    report_md: reportMd,
-    result_index_json: resultIndexJson,
-    t1_schema_report_json: t1SchemaReportJson,
-    qc_report_json: qcReportJson,
-    field_lineage_md: fieldLineageDocMd,
-    region_adjust_request: artifacts.regionAdjustRequestJson,
-    human_gate_request: artifacts.humanGateRequestJson
-  };
+  runStatus.artifacts = buildArtifactPathMap(artifacts);
   writeRunStatus(statusJson, runStatus);
 
-  progress?.(`Artifacts: crossmatch=${crossmatchCsv}`);
-  progress?.(`Artifacts: image_pair_index=${imagePairIndexCsv}`);
+  progress?.(`Artifacts: candidate_pool=${candidatePoolCsv}`);
   progress?.(`Artifacts: status=${statusJson}`);
   progress?.(`Artifacts: input_manifest=${inputManifestJson}`);
   progress?.(`Artifacts: desi_origin=${desiOriginJson}`);
@@ -1332,6 +1441,15 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   progress?.(`Artifacts: preview=${previewCsv}`);
   progress?.(`Artifacts: preview_summary=${previewSummaryJson}`);
   progress?.(`Artifacts: filtered=${filteredCsv}`);
+  progress?.(`Artifacts: selection_candidates=${selectionCandidatesCsv}`);
+  progress?.(`Artifacts: selection_final=${selectionFinalCsv}`);
+  progress?.(`Artifacts: selection_report=${selectionReportJson}`);
+  if (selectionGate.requestFile) {
+    progress?.(`Artifacts: selection_plan_request=${selectionGate.requestFile}`);
+  }
+  if (selectionGate.responseFile) {
+    progress?.(`Artifacts: selection_plan_response=${selectionGate.responseFile}`);
+  }
   progress?.(`Artifacts: report=${reportMd}`);
   progress?.(`Artifacts: result_index=${resultIndexJson}`);
   progress?.(`Artifacts: t1_schema_report=${t1SchemaReportJson}`);
@@ -1339,9 +1457,6 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   progress?.(`Artifacts: field_lineage=${fieldLineageDocMd}`);
   if (artifacts.regionAdjustRequestJson) {
     progress?.(`Artifacts: region_adjust_request=${artifacts.regionAdjustRequestJson}`);
-  }
-  if (artifacts.humanGateRequestJson) {
-    progress?.(`Artifacts: human_filter_request=${artifacts.humanGateRequestJson}`);
   }
 
     return { runId, runDir, artifacts, summary };

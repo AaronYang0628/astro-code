@@ -20,7 +20,7 @@
 - `src/orchestrator/`: TypeScript 编排在 MVP 实现
 - `py/workers/`: Python 辅助脚本（用于本地数据处理工具）
 - `.opencode/agents|skills|plugins/`: 智能体运行时契约
-- `runs/`: 运行时输出（`status.json`、`crossmatch.csv`、`preview_100.csv`、`filtered.csv`）
+- `runs/`: 运行时输出（`status.json`、`candidate_pool.csv`、`preview_100.csv`、`filtered.csv`）
 - `docs/`: 架构和契约文档
 
 ## 快速开始
@@ -40,7 +40,7 @@ npm run run:mvp
 
 3) 检查 `runs/<run_id>/` 下的输出文件
 
-- `crossmatch.csv`
+- `candidate_pool.csv`
 - `preview_100.csv`
 - `filtered.csv`
 - `stats.json`
@@ -77,7 +77,7 @@ npx tsx src/orchestrator/index.ts \
 ### 输出位置
 
 结果写入 `runs/<run_id>/`：
-- `crossmatch.csv`
+- `candidate_pool.csv`
 - `preview_100.csv`
 - `filtered.csv`
 - `stats.json`

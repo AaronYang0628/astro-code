@@ -28,21 +28,25 @@
 - `file_upload` is disabled by policy. If user provides uploaded file context, return a clear error and instruct user to use `s3://` or `RA/DEC` input.
 - For `tile_index`: prefer native Euclid fields (`TILE_INDEX`/`TILEID`), then call `euclid-catalog.resolve_tile_id(ra,dec)` when missing; always keep `tile_index_source` auditable (`euclid.native_field` or `euclid.resolve_tile_id:*` or `pending_ra_dec_to_tile_mapping`).
 - In development mode only, when real DESI rows are zero and `DESI_MOCK_ENABLE=true` (default off), allow deterministic mock DESI rows to unblock downstream pipeline steps; mock rows must be seeded from real DESI MCP fields and only adjust RA/DEC. Must mark outputs as mock-origin in `desi_origin.json`, `stats.json`, `report.md`, and set `path_source=mock`.
-- If real crossmatch rows are zero, must trigger a decision gate with two options: `region_adjust` (real-data retry) or `mock_continue` (development fallback).
+- If real candidate pool rows are zero, must trigger a decision gate with two options: `region_adjust` (real-data retry) or `mock_continue` (development fallback).
 - `mock_continue` is opt-in only: never auto-enable mock unless user explicitly chooses it.
-- If user chooses `mock_continue`, run local pipeline once with mock env (`DESI_MOCK_ENABLE=true`, `DESI_MOCK_MIN_CROSSMATCH_ROWS>=10`) using the same input, then continue subsequent steps from generated artifacts (`crossmatch.csv`, `image_pair_index.csv`) and clearly mark run as mock-derived.
-- For T2 readiness, output must include `image_pair_index.csv` and crossmatch path fields (`euclid_vis_path_pattern`, `desi_tractor_i_path`, `desi_image_*_path`, `path_source`).
+- If user chooses `mock_continue`, run local pipeline once with mock env (`DESI_MOCK_ENABLE=true`, `DESI_MOCK_MIN_CROSSMATCH_ROWS>=10`) using the same input, then continue subsequent steps from generated artifacts (`candidate_pool.csv`) and clearly mark run as mock-derived.
 - Region-adjust and filter-entry interactions must use configured backend and remain auditable via run artifacts.
 - Plain-text decision fallback is not allowed.
 - If selected backend is unavailable in current session/runtime, report explicit error with raw backend/tool error.
 - After producing result paths, read `preview_summary.json` and show preview summary (`preview rows`, `available filter fields`, and a few sample rows) without asking user to open files manually.
 - Show preview sample as markdown table (top 10 rows) before any filtering interaction.
-- If crossmatch rows are greater than 0, first ask user whether to enter filtering via configured backend; only after confirmation, hand off to `filter-agent` for multi-condition flow.
+- If candidate pool rows are greater than 0, do not run a second result-filter gate. Proceed directly to six-condition selection planning.
+- After candidate pool generation, always run selection planning as Step 2: present six selectable conditions (any subset, user-defined order), then apply selected conditions as the only filtering stage in matching phase.
+- Step 1 must output `candidate_pool.csv`.
 - Never claim "large response saved" without writing a real file under `runs/<run_id>/` and printing its absolute path.
 - Must always print explicit artifact paths from run output:
-  - `crossmatch.csv`
+  - `candidate_pool.csv`
   - `preview_100.csv`
   - `preview_summary.json`
-  - `filtered.csv`
+  - `filtered.csv` (alias of selection final output)
+  - `selection_candidates.csv`
+  - `selection_final.csv`
+  - `selection_report.json`
   - `result_index.json`
-- If crossmatch rows are zero, must point to `region_adjust_request.json` and trigger configured-backend follow-up interaction for parameter adjustment.
+- If candidate pool rows are zero, must point to `region_adjust_request.json` and trigger configured-backend follow-up interaction for parameter adjustment.

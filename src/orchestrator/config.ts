@@ -13,7 +13,7 @@ const DEFAULT_CONFIG: AppConfig = {
     interaction_secondary: "cli"
   },
   paths: {
-    default_playbook: "playbooks/euclid_desi_mvp.playbook.md",
+    default_playbook: "playbooks/euclid_cutout_mvp.playbook.md",
     runs_dir: "runs"
   },
   runtime: {
