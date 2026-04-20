@@ -674,41 +674,42 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
     throw new Error("S3 input must use s3://bucket/key format.");
   }
 
-  const infoRaw = await callMcpTool(EUCLID_SERVER, "get_catalog_info_with_stats", {
-    catalog_path: uri
-  }) as Record<string, unknown>;
-
-  const info = unwrapEuclidToolPayload(infoRaw);
-  const infoError = getToolError(infoRaw);
-
-  const ranges = (info.coordinate_ranges as Record<string, unknown> | undefined) ?? {};
-  const raMin = toNumber(ranges.ra_min);
-  const raMax = toNumber(ranges.ra_max);
-  const decMin = toNumber(ranges.dec_min);
-  const decMax = toNumber(ranges.dec_max);
-
-  if (raMin !== null && raMax !== null && decMin !== null && decMax !== null) {
-    return {
-      ra_deg: (raMin + raMax) / 2,
-      dec_deg: (decMin + decMax) / 2,
-      ra_min: raMin,
-      ra_max: raMax,
-      dec_min: decMin,
-      dec_max: decMax,
-      s3_path: uri,
-      num_objects: toNumber(info.num_objects) ?? undefined,
-      source: "mcp_s3_reader"
-    };
+  const tileId = extractTileIdFromPath(uri);
+  if (tileId) {
+    const tileCoord = await extractCoordFromTileIndexViaAstro(tileId);
+    if (tileCoord) {
+      return {
+        ...tileCoord,
+        s3_path: uri,
+        source: "astro_k3s_mcp.euclid_tile_index_from_path"
+      };
+    }
   }
 
-  const rowsRaw = await callMcpTool(EUCLID_SERVER, "get_catalog_objects", {
-    catalog_path: uri,
-    start: 0,
-    limit: 256,
-    columns: ["RIGHT_ASCENSION", "DECLINATION"]
-  }) as Record<string, unknown>;
-  const objects = getEuclidObjects(rowsRaw);
-  const objectsError = getToolError(rowsRaw);
+  let headerError: string | undefined;
+  try {
+    const headerRaw = await callMcpTool(EUCLID_SERVER, "parse_fits_header_only", {
+      catalog_path: uri
+    }) as Record<string, unknown>;
+    headerError = getToolError(headerRaw);
+  } catch (error) {
+    headerError = error instanceof Error ? error.message : String(error);
+  }
+
+  let objects: Record<string, unknown>[] = [];
+  let objectsError: string | undefined;
+  try {
+    const rowsRaw = await callMcpTool(EUCLID_SERVER, "get_catalog_objects", {
+      catalog_path: uri,
+      start: 0,
+      limit: 256,
+      columns: ["RIGHT_ASCENSION", "DECLINATION"]
+    }) as Record<string, unknown>;
+    objects = getEuclidObjects(rowsRaw);
+    objectsError = getToolError(rowsRaw);
+  } catch (error) {
+    objectsError = error instanceof Error ? error.message : String(error);
+  }
 
   let raMinFallback = Number.POSITIVE_INFINITY;
   let raMaxFallback = Number.NEGATIVE_INFINITY;
@@ -732,7 +733,6 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
     || !Number.isFinite(decMinFallback)
     || !Number.isFinite(decMaxFallback)
   ) {
-    const tileId = extractTileIdFromPath(uri);
     if (tileId) {
       const tileCoord = await extractCoordFromTileIndexViaAstro(tileId);
       if (tileCoord) {
@@ -745,11 +745,11 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
     }
 
     const reasons = [
-      infoError ? `get_catalog_info_with_stats_error=${infoError}` : null,
+      headerError ? `parse_fits_header_only_error=${headerError}` : null,
       objectsError ? `get_catalog_objects_error=${objectsError}` : null
     ].filter((v): v is string => v !== null);
     const detail = reasons.length > 0 ? ` (${reasons.join("; ")})` : "";
-    throw new Error(`Euclid MCP did not return coordinate_ranges and no valid RA/DEC rows were found in S3 objects${detail}.`);
+    throw new Error(`Unable to derive RA/DEC from S3 FITS input${detail}.`);
   }
 
   return {

@@ -88,7 +88,12 @@ spec:
         args:
           - |
             set -e
+            mkdir -p /mnt/workspace
+            if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
+              cp -a /opt/astro-code-seed/workspace/. /mnt/workspace/
+            fi
             mkdir -p /mnt/workspace/.opencode
+            mkdir -p /mnt/workspace/runs
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
         volumeMounts:

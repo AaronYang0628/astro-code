@@ -20,6 +20,7 @@ hostAliases:
   - ip: "192.168.31.111"
     hostnames:
       - "catalog.euclid.mcp.ay.dev"
+      - "fits-cutout.mcp.ay.dev"
 
 opencodeConfig:
   mode: external

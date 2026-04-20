@@ -15,8 +15,9 @@
     },
     "fits-cutout": {
       "type": "remote",
-      "url": "http://fits-cutout-mcp.mcp.svc.cluster.local:8000/mcp",
-      "enabled": true
+      "url": "https://fits-cutout.mcp.ay.dev:32443/mcp",
+      "enabled": true,
+      "timeout": 180000
     }
   },
   "provider": {

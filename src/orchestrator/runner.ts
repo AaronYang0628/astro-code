@@ -12,6 +12,7 @@ import type { DesiQueryDetails } from "./mcp.js";
 import { loadPlaybook } from "./playbook.js";
 import { applySelectionPlan } from "./selection.js";
 import { executeGroupedCutoutViaMcp } from "./cutout.js";
+import { resolveCutoutEnabled, shouldExecuteCutout } from "./cutout-gate.js";
 import type { CatalogRecord, Coord, CrossmatchRecord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
 
 function toBrickPrefix(brickname: string): string {
@@ -966,17 +967,17 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   );
 
   const selectionRequired = interaction === "web";
-  const inlineSelectionProvided = Boolean(effectiveRequest.selection && Array.isArray(effectiveRequest.selection.conditions) && effectiveRequest.selection.conditions.length > 0);
-  if (selectionRequired && (selectionGate.mode !== "selected" || (inlineSelectionProvided && effectiveRequest.selection_confirmed !== true))) {
-    const selectionMessage = inlineSelectionProvided && effectiveRequest.selection_confirmed !== true
-      ? "Web mode requires explicit user confirmation popup before applying provided six-condition selection."
-      : "Web mode requires explicit six-condition selection before final export.";
+  if (selectionRequired && selectionGate.mode !== "selected") {
+    const selectionMessage = selectionGate.reason
+      ?? "Web mode requires explicit six-condition selection popup confirmation before final export.";
     writeJson(selectionReportJson, {
       run_id: runId,
       mode: "waiting_user_selection",
       selection_required: true,
       request_file: selectionGate.requestFile ?? null,
       response_file: selectionGate.responseFile ?? null,
+      confirmation_received: selectionGate.confirmationReceived ?? false,
+      response_present: selectionGate.responsePresent ?? false,
       message: selectionMessage,
       available_filter_fields: availableFilterFields,
       preview_sample: previewSample,
@@ -1061,7 +1062,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       `- preview_csv: ${previewCsv}`,
       `- selection_plan_request_json: ${selectionGate.requestFile ?? "n/a"}`,
       `- selection_report_json: ${selectionReportJson}`,
-      `- next_action: provide six-condition selection plan in web, then rerun with selection payload`
+      `- next_action: complete popup selection + confirmation receipt, then rerun with selection_confirmed=true`
     ]);
 
     runStatus.state = "waiting_selection";
@@ -1128,14 +1129,15 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   const filtered = selectionResult.selected_rows;
 
-  const cutoutEnabled = effectiveRequest.cutout?.enabled === true;
+  const cutoutEnabled = resolveCutoutEnabled(effectiveRequest.cutout?.enabled, isEuclidSingleWorkflow);
+  const cutoutShouldExecute = shouldExecuteCutout(cutoutEnabled, filtered.length);
   let cutoutGroupsTotal = 0;
   let cutoutSuccessRows = 0;
   let cutoutFailedRows = 0;
   let cutoutServerName = "fits-cutout";
   let cutoutOutputPrefix: string | undefined;
 
-  if (cutoutEnabled) {
+  if (cutoutShouldExecute) {
     step("cutout-execute", "execute grouped FITS cutout via remote MCP", "group selection rows by source image and invoke fits-cutout MCP");
     cutoutServerName = typeof effectiveRequest.cutout?.mcp_server === "string" && effectiveRequest.cutout.mcp_server.trim().length > 0
       ? effectiveRequest.cutout.mcp_server.trim()
@@ -1201,9 +1203,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     selection_plan_response_json: selectionGate.responseFile,
     selection_final_csv: selectionFinalCsv,
     selection_report_json: selectionReportJson,
-    cutout_index_csv: cutoutEnabled ? cutoutIndexCsv : undefined,
-    cutout_report_json: cutoutEnabled ? cutoutReportJson : undefined,
-    cutout_raw_reports_json: cutoutEnabled ? cutoutRawReportsJson : undefined
+    cutout_index_csv: cutoutShouldExecute ? cutoutIndexCsv : undefined,
+    cutout_report_json: cutoutShouldExecute ? cutoutReportJson : undefined,
+    cutout_raw_reports_json: cutoutShouldExecute ? cutoutRawReportsJson : undefined
   };
   writeRunStatus(statusJson, runStatus);
 
@@ -1246,14 +1248,15 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     },
     cutout: {
       enabled: cutoutEnabled,
-      server: cutoutEnabled ? cutoutServerName : null,
-      output_prefix: cutoutEnabled ? (cutoutOutputPrefix ?? "service_default") : null,
+      executed: cutoutShouldExecute,
+      server: cutoutShouldExecute ? cutoutServerName : null,
+      output_prefix: cutoutShouldExecute ? (cutoutOutputPrefix ?? "service_default") : null,
       groups_total: cutoutGroupsTotal,
       success_rows: cutoutSuccessRows,
       failed_rows: cutoutFailedRows,
-      index_csv: cutoutEnabled ? cutoutIndexCsv : null,
-      report_json: cutoutEnabled ? cutoutReportJson : null,
-      raw_reports_json: cutoutEnabled ? cutoutRawReportsJson : null
+      index_csv: cutoutShouldExecute ? cutoutIndexCsv : null,
+      report_json: cutoutShouldExecute ? cutoutReportJson : null,
+      raw_reports_json: cutoutShouldExecute ? cutoutRawReportsJson : null
     },
     filter: null,
     enrichment: {
@@ -1276,9 +1279,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       selectionReportJson,
       selectionPlanRequestJson: selectionGate.requestFile,
       selectionPlanResponseJson: selectionGate.responseFile,
-      cutoutIndexCsv: cutoutEnabled ? cutoutIndexCsv : undefined,
-      cutoutReportJson: cutoutEnabled ? cutoutReportJson : undefined,
-      cutoutRawReportsJson: cutoutEnabled ? cutoutRawReportsJson : undefined,
+      cutoutIndexCsv: cutoutShouldExecute ? cutoutIndexCsv : undefined,
+      cutoutReportJson: cutoutShouldExecute ? cutoutReportJson : undefined,
+      cutoutRawReportsJson: cutoutShouldExecute ? cutoutRawReportsJson : undefined,
       statsJson,
       reportMd,
       resultIndexJson,
@@ -1308,9 +1311,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     selectionReportJson,
     selectionPlanRequestJson: selectionGate.requestFile,
     selectionPlanResponseJson: selectionGate.responseFile,
-    cutoutIndexCsv: cutoutEnabled ? cutoutIndexCsv : undefined,
-    cutoutReportJson: cutoutEnabled ? cutoutReportJson : undefined,
-    cutoutRawReportsJson: cutoutEnabled ? cutoutRawReportsJson : undefined,
+    cutoutIndexCsv: cutoutShouldExecute ? cutoutIndexCsv : undefined,
+    cutoutReportJson: cutoutShouldExecute ? cutoutReportJson : undefined,
+    cutoutRawReportsJson: cutoutShouldExecute ? cutoutRawReportsJson : undefined,
     statsJson,
     reportMd,
     resultIndexJson,
@@ -1375,8 +1378,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- preview_rows_written: ${preview.length}`,
     `- final_rows: ${filtered.length}`,
     `- cutout_enabled: ${cutoutEnabled ? "yes" : "no"}`,
-    `- cutout_server: ${cutoutEnabled ? cutoutServerName : "n/a"}`,
-    `- cutout_output_prefix: ${cutoutEnabled ? (cutoutOutputPrefix ?? "service_default") : "n/a"}`,
+    `- cutout_executed: ${cutoutShouldExecute ? "yes" : "no"}`,
+    `- cutout_server: ${cutoutShouldExecute ? cutoutServerName : "n/a"}`,
+    `- cutout_output_prefix: ${cutoutShouldExecute ? (cutoutOutputPrefix ?? "service_default") : "n/a"}`,
     `- cutout_groups_total: ${cutoutGroupsTotal}`,
     `- cutout_success_rows: ${cutoutSuccessRows}`,
     `- cutout_failed_rows: ${cutoutFailedRows}`,
@@ -1393,9 +1397,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     `- preview_csv: ${previewCsv}`,
     `- selection_final_csv: ${selectionFinalCsv}`,
     `- selection_report_json: ${selectionReportJson}`,
-    `- cutout_index_csv: ${cutoutEnabled ? cutoutIndexCsv : "n/a"}`,
-    `- cutout_report_json: ${cutoutEnabled ? cutoutReportJson : "n/a"}`,
-    `- cutout_raw_reports_json: ${cutoutEnabled ? cutoutRawReportsJson : "n/a"}`,
+    `- cutout_index_csv: ${cutoutShouldExecute ? cutoutIndexCsv : "n/a"}`,
+    `- cutout_report_json: ${cutoutShouldExecute ? cutoutReportJson : "n/a"}`,
+    `- cutout_raw_reports_json: ${cutoutShouldExecute ? cutoutRawReportsJson : "n/a"}`,
     `- selection_plan_request_json: ${selectionGate.requestFile ?? "n/a"}`,
     `- selection_plan_response_json: ${selectionGate.responseFile ?? "n/a"}`,
     `- result_index_json: ${resultIndexJson}`,
@@ -1453,7 +1457,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   progress?.(`Artifacts: preview=${previewCsv}`);
   progress?.(`Artifacts: selection_final=${selectionFinalCsv}`);
   progress?.(`Artifacts: selection_report=${selectionReportJson}`);
-  if (cutoutEnabled) {
+  if (cutoutShouldExecute) {
     progress?.(`Artifacts: cutout_index=${cutoutIndexCsv}`);
     progress?.(`Artifacts: cutout_report=${cutoutReportJson}`);
     progress?.(`Artifacts: cutout_raw_reports=${cutoutRawReportsJson}`);

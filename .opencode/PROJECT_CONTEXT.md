@@ -22,7 +22,10 @@
 
 - 先交互、后执行：默认不要一上来直接 `npx`/`npm run run`。
 - 每步都要有明确结构：`STEP` / `GOAL` / `ACTION` / `RESULT`。
+- 每一步执行前后都必须打印完整结构：先 `STEP/GOAL/ACTION`，执行后 `RESULT`，禁止静默调用 MCP。
 - Web 页面中禁止 one-shot 一键产出最终结果；必须按 playbook 步骤逐步执行。
+- Web 模式默认连续执行（不需要每步都停）；仅在 `waiting_selection` 或 `zero-result` 门禁暂停。
+- 当 `interaction_backend=native` 且进入 selection 门禁时，必须主动触发 OpenCode 原生弹框（question UI）；仅写 request 文件不算完成交互。
 - 仅本地自测/回归允许使用 `npx`/`npm run run` 一键执行。
 - 开发阶段优先可解释性与可观测性，历史兼容和旧路径规则可丢弃。
 

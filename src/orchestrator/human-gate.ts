@@ -38,6 +38,9 @@ export interface SelectionGateResult {
   plan: SelectionPlan;
   requestFile?: string;
   responseFile?: string;
+  confirmationReceived?: boolean;
+  responsePresent?: boolean;
+  reason?: string;
 }
 
 const SELECTION_CONDITION_IDS: SelectionConditionId[] = [
@@ -189,14 +192,18 @@ export async function resolveSelectionPlan(
   if (interaction !== "web" && inlineSelection && Array.isArray(inlineSelection.conditions) && inlineSelection.conditions.length > 0) {
     return {
       mode: "selected",
-      plan: inlineSelection
+      plan: inlineSelection,
+      confirmationReceived: selectionConfirmed,
+      responsePresent: false
     };
   }
 
   if (interaction !== "web") {
     return {
       mode: "default",
-      plan: DEFAULT_SELECTION_PLAN
+      plan: DEFAULT_SELECTION_PLAN,
+      confirmationReceived: selectionConfirmed,
+      responsePresent: false
     };
   }
 
@@ -270,24 +277,49 @@ export async function resolveSelectionPlan(
 
   fs.writeFileSync(requestPath, JSON.stringify(requestBody, null, 2));
 
-  if (inlineSelection && Array.isArray(inlineSelection.conditions) && inlineSelection.conditions.length > 0 && selectionConfirmed) {
-    return {
-      mode: "selected",
-      plan: inlineSelection,
-      requestFile: requestPath,
-      responseFile: fs.existsSync(responsePath) ? responsePath : undefined
-    };
+  if (!fs.existsSync(responsePath)) {
+    fs.writeFileSync(
+      responsePath,
+      JSON.stringify(
+        {
+          run_id: context.runId,
+          status: "pending_user_selection",
+          message: "Web gate is waiting for frontend popup confirmation and submitted selection response."
+        },
+        null,
+        2
+      )
+    );
   }
 
-  const parsed = fs.existsSync(responsePath)
+  const hasResponseFile = fs.existsSync(responsePath);
+  const parsed = hasResponseFile
     ? parseSelectionPlan(JSON.parse(fs.readFileSync(responsePath, "utf8")))
     : undefined;
 
+  if (selectionConfirmed && parsed) {
+    return {
+      mode: "selected",
+      plan: parsed,
+      requestFile: requestPath,
+      responseFile: responsePath,
+      confirmationReceived: true,
+      responsePresent: true
+    };
+  }
+
+  const reason = !selectionConfirmed
+    ? "Web mode requires explicit popup confirmation before applying selection plan."
+    : "Web mode requires valid selection_plan_response.json before applying selection plan.";
+
   return {
-    mode: parsed ? "selected" : "default",
-    plan: parsed ?? DEFAULT_SELECTION_PLAN,
+    mode: "default",
+    plan: DEFAULT_SELECTION_PLAN,
     requestFile: requestPath,
-    responseFile: fs.existsSync(responsePath) ? responsePath : undefined
+    responseFile: responsePath,
+    confirmationReceived: selectionConfirmed,
+    responsePresent: Boolean(parsed),
+    reason
   };
 }
 

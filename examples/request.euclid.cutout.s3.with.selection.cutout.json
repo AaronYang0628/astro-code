@@ -1,0 +1,29 @@
+{
+  "workflow": "euclid_cutout",
+  "input": {
+    "type": "s3_uri",
+    "value": "s3://data-and-computing/projects/CSST/shared-data/euclid/aws-mirrors/q1/catalogs/MER_FINAL_CATALOG/102018211/EUC_MER_FINAL-CAT_TILE102018211-CC66F6_20241018T214045.289017Z_00.00.fits"
+  },
+  "radiusArcsec": 1.0,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web",
+  "selection": {
+    "conditions": [
+      {
+        "id": "oversized_galaxy_filter",
+        "params": {
+          "stamp_size_px": 160
+        }
+      }
+    ]
+  },
+  "selection_confirmed": true,
+  "cutout": {
+    "enabled": true,
+    "mcp_server": "fits-cutout",
+    "output_prefix": "s3://data-and-computing/projects/CSST/shared-data/astro/cutouts",
+    "size_deg": 0.008,
+    "desi_bands": ["g", "r", "i", "z"]
+  }
+}
