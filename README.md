@@ -20,7 +20,7 @@ Multi-agent astronomy workflow project focused on Euclid x DESI MVP flow.
 - `src/orchestrator/`: TypeScript orchestration MVP
 - `py/workers/`: Python helpers used in local data tooling
 - `.opencode/agents|skills|plugins/`: contracts for agentic runtime
-- `runs/`: runtime outputs (`status.json`, `candidate_pool.csv`, `preview_100.csv`, `filtered.csv`)
+- `runs/`: runtime outputs (`status.json`, `candidate_pool.csv`, `preview_10.csv`, `selection_final.csv`)
 - `docs/`: architecture and contracts
 
 ## Quick start
@@ -41,15 +41,14 @@ npm run run:mvp
 3) Check output files under `runs/<run_id>/`
 
 - `candidate_pool.csv`
-- `preview_100.csv`
-- `filtered.csv`
+- `preview_10.csv`
+- `selection_final.csv` (written after explicit six-condition selection)
 - `stats.json`
 - `report.md`
 - `result_index.json`
 - `status.json` (phase/status/error for live troubleshooting)
 - `input_manifest.json`
 - `region_adjust_request.json` (only when no crossmatch results)
-- `preview_summary.json` (preview count + sample rows + filterable fields)
 - `desi_origin.json` (DESI source metadata: ES/S3/local hint + source path when exposed)
 - `mcp/desi_search_query.json`
 - `mcp/desi_search_initial.raw.json`
@@ -88,12 +87,64 @@ Detailed guides:
   - `hybrid`: octto first, native fallback
 - If Euclid MCP uses self-signed TLS cert, set `MCP_INSECURE_TLS=1` for `npm run` pipeline (or set a trusted CA).
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).
+- Web mode requires explicit six-condition selection before writing `selection_final.csv` (status becomes `waiting_selection` until selected).
 - When crossmatch has rows, field/value filtering is collected via configured backend (`native|octto|hybrid`).
+- Local cutout worker (no MCP server required): `py/workers/cutout_stamp_worker.py`.
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
 - Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
 - Helm supports `hostAliases` for fake/local MCP domains (for example `catalog.euclid.mcp.ay.dev`), but Cluster DNS is recommended.
 - OpenCode config mount supports three modes via `opencodeConfig.mode`: `seed` (default), `secret`, `external`.
+
+## Cutout stamps (local worker)
+
+Use filtered rows (`selection_final.csv`) to generate Euclid/DESI FITS stamps locally.
+
+```bash
+python3 py/workers/cutout_stamp_worker.py \
+  --input-csv runs/<run_id>/selection_final.csv \
+  --output-dir runs/<run_id>/cutouts
+```
+
+Notes:
+
+- The worker groups by source FITS path and cuts multiple objects per open file (reduced IO).
+- Euclid uses `euclid_fits_path`; DESI uses `desi_image_g/r/i/z_path`.
+- If CSV paths are S3 URIs, provide path remap rules to local files via repeatable `--path-map SRC=DST`.
+- Outputs include `cutout_index.csv` and `cutout_report.json` under the output dir.
+
+## Remote cutout MCP execution
+
+When a remote `fits-cutout` MCP is available, orchestrator can execute grouped cutout directly against S3 without local file mounts.
+
+Request example:
+
+```json
+{
+  "workflow": "euclid_cutout",
+  "input": { "type": "s3_uri", "value": "s3://.../catalog.fits" },
+  "interaction": "web",
+  "selection": {
+    "conditions": [
+      { "id": "oversized_galaxy_filter", "params": { "stamp_size_px": 160 } }
+    ]
+  },
+  "selection_confirmed": true,
+  "cutout": {
+    "enabled": true,
+    "mcp_server": "fits-cutout",
+    "output_prefix": "s3://data-and-computing/projects/CSST/shared-data/astro/cutouts",
+    "size_deg": 0.008,
+    "desi_bands": ["g", "r", "i", "z"]
+  }
+}
+```
+
+Run artifacts will additionally include:
+
+- `cutout_index.csv`
+- `cutout_report.json`
+- `cutout_raw_reports.json`
 
 ## Octto plugin
 

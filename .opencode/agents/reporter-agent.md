@@ -5,12 +5,9 @@
 ## Required files
 
 - `candidate_pool.csv`
-- `preview_100.csv`
-- `preview_summary.json`
-- `selection_candidates.csv`
+- `preview_10.csv`
 - `selection_final.csv`
 - `selection_report.json`
-- `filtered.csv` (alias)
 - `stats.json`
 - `report.md`
 - `result_index.json`
@@ -21,7 +18,7 @@
 
 - `type, RIGHT_ASCENSION, DECLINATION, SEMIMAJOR_AXIS, SEGMENTATION_AREA, FLUX_SEGMENTATION, FLUX_VIS_1FWHM_APER, FLUX_VIS_2FWHM_APER, FLUX_VIS_3FWHM_APER, FLUX_VIS_4FWHM_APER`
 - `euclid_fits_path`
-- `desi_fits_g_path, desi_fits_r_path, desi_fits_i_path, desi_fits_z_path, desi_tractor_i_fits_path`
+- `desi_tractor_i_fits_path, desi_tractor_fits_path, desi_image_g_path, desi_image_r_path, desi_image_i_path, desi_image_z_path`
 
 ## Response behavior
 

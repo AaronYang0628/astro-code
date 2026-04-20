@@ -38,6 +38,16 @@ export interface SelectionPlan {
   conditions: SelectionConditionConfig[];
 }
 
+export type CutoutDesiBand = "g" | "r" | "i" | "z";
+
+export interface CutoutRequest {
+  enabled?: boolean;
+  mcp_server?: string;
+  output_prefix?: string;
+  size_deg?: number;
+  desi_bands?: CutoutDesiBand[];
+}
+
 export interface RunRequest {
   input: InputSpec;
   execution_mode?: "pipeline_strict" | "interactive_debug";
@@ -48,6 +58,8 @@ export interface RunRequest {
   interaction?: InteractionMode;
   filter?: FilterCondition | FilterSpec;
   selection?: SelectionPlan;
+  selection_confirmed?: boolean;
+  cutout?: CutoutRequest;
 }
 
 export interface RunArtifacts {
@@ -63,8 +75,6 @@ export interface RunArtifacts {
   desiSearchRetrySampleRawJson?: string;
   candidatePoolCsv?: string;
   previewCsv?: string;
-  previewSummaryJson?: string;
-  filteredCsv?: string;
   statsJson: string;
   reportMd: string;
   resultIndexJson: string;
@@ -73,12 +83,13 @@ export interface RunArtifacts {
   t1SchemaReportJson?: string;
   qcReportJson?: string;
   fieldLineageDocMd?: string;
-  mockContinueHandoffJson?: string;
-  selectionCandidatesCsv?: string;
   selectionFinalCsv?: string;
   selectionReportJson?: string;
   selectionPlanRequestJson?: string;
   selectionPlanResponseJson?: string;
+  cutoutIndexCsv?: string;
+  cutoutReportJson?: string;
+  cutoutRawReportsJson?: string;
 }
 
 export interface RunSummary {
@@ -91,12 +102,16 @@ export interface RunSummary {
   candidatePoolRows?: number;
   previewRows?: number;
   filteredRows?: number;
+  selectionRequired?: boolean;
   availableFilterFields?: string[];
   previewSample?: Record<string, unknown>[];
-  humanGateMode?: "filter" | "filter_confirm" | "region_adjust" | "mock_continue" | "none";
+  humanGateMode?: "filter" | "filter_confirm" | "region_adjust" | "none";
   executionMode: "ts_orchestrator";
   t1RowsWithMissing?: number;
-  mockChildRunId?: string;
+  cutoutEnabled?: boolean;
+  cutoutGroupsTotal?: number;
+  cutoutSuccessRows?: number;
+  cutoutFailedRows?: number;
 }
 
 export interface Coord {

@@ -52,9 +52,9 @@ brick_primary=true
 8. 仅当我回答“是”时，收集多条件筛选并应用
 9. 最终逐行输出文件绝对路径：
    candidate_pool.csv
-   preview_100.csv
-   preview_summary.json
-   filtered.csv
+   preview_10.csv
+   selection_final.csv
+   selection_report.json
    report.md
    result_index.json
    （若存在）region_adjust_request.json

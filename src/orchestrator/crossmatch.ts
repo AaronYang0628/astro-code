@@ -254,9 +254,7 @@ export function crossmatchCatalogs(
     const type = typeof typeValue === "string" && typeValue.trim().length > 0 ? typeValue : null;
     const brickid = Number.isFinite(best.brickid ?? Number.NaN) ? Number(best.brickid) : null;
     const tileIndexSource = e.tile_index_source ?? (tileIndex !== null ? "euclid.tile_index" : "pending_ra_dec_to_tile_mapping");
-    const pathSource = String(best.source_system ?? "").toLowerCase().startsWith("mock")
-      ? "mock"
-      : "derived";
+    const pathSource = "derived";
 
     const euclidVisPathPattern = tileIndex ? buildEuclidVisPathPattern(tileIndex) : null;
     const desiTractorIPath = brickname ? buildDesiTractorIPath(brickname) : null;

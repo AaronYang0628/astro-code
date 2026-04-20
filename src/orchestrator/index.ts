@@ -87,6 +87,9 @@ async function main(): Promise<void> {
   });
 
   process.stdout.write(`Run complete: ${result.runId}\n`);
+  if (requestWorkflow && result.summary.selectionRequired) {
+    process.stdout.write("Web interaction note: run is waiting for explicit six-condition selection plan before final export.\n");
+  }
   process.stdout.write(`Output dir: ${result.runDir}\n`);
   process.stdout.write(`Execution mode: ${result.summary.executionMode}\n`);
   process.stdout.write(`Run mode: ${result.summary.mode}\n`);
@@ -94,10 +97,14 @@ async function main(): Promise<void> {
   process.stdout.write(`Candidate pool rows: ${candidatePoolRows(result.summary)}\n`);
   process.stdout.write(`Preview rows: ${result.summary.previewRows}\n`);
   process.stdout.write(`Filtered rows: ${result.summary.filteredRows}\n`);
-  process.stdout.write(`Human gate mode: ${result.summary.humanGateMode}\n`);
-  if (result.summary.mockChildRunId) {
-    process.stdout.write(`Mock child run: ${result.summary.mockChildRunId}\n`);
+  process.stdout.write(`Cutout enabled: ${result.summary.cutoutEnabled ? "yes" : "no"}\n`);
+  if (result.summary.cutoutEnabled) {
+    process.stdout.write(`Cutout groups total: ${result.summary.cutoutGroupsTotal}\n`);
+    process.stdout.write(`Cutout success rows: ${result.summary.cutoutSuccessRows}\n`);
+    process.stdout.write(`Cutout failed rows: ${result.summary.cutoutFailedRows}\n`);
   }
+  process.stdout.write(`Selection required: ${result.summary.selectionRequired ? "yes" : "no"}\n`);
+  process.stdout.write(`Human gate mode: ${result.summary.humanGateMode}\n`);
   process.stdout.write(`Available filter fields: ${(result.summary.availableFilterFields ?? []).join(", ") || "n/a"}\n`);
   if ((result.summary.previewSample ?? []).length > 0) {
     process.stdout.write("Preview sample (markdown table):\n");
@@ -132,20 +139,20 @@ async function main(): Promise<void> {
   if (result.artifacts.previewCsv) {
     process.stdout.write(`Preview CSV: ${result.artifacts.previewCsv}\n`);
   }
-  if (result.artifacts.previewSummaryJson) {
-    process.stdout.write(`Preview summary: ${result.artifacts.previewSummaryJson}\n`);
-  }
-  if (result.artifacts.filteredCsv) {
-    process.stdout.write(`Filtered CSV: ${result.artifacts.filteredCsv}\n`);
-  }
-  if (result.artifacts.selectionCandidatesCsv) {
-    process.stdout.write(`Selection candidates CSV: ${result.artifacts.selectionCandidatesCsv}\n`);
-  }
   if (result.artifacts.selectionFinalCsv) {
     process.stdout.write(`Selection final CSV: ${result.artifacts.selectionFinalCsv}\n`);
   }
   if (result.artifacts.selectionReportJson) {
     process.stdout.write(`Selection report JSON: ${result.artifacts.selectionReportJson}\n`);
+  }
+  if (result.artifacts.cutoutIndexCsv) {
+    process.stdout.write(`Cutout index CSV: ${result.artifacts.cutoutIndexCsv}\n`);
+  }
+  if (result.artifacts.cutoutReportJson) {
+    process.stdout.write(`Cutout report JSON: ${result.artifacts.cutoutReportJson}\n`);
+  }
+  if (result.artifacts.cutoutRawReportsJson) {
+    process.stdout.write(`Cutout raw reports JSON: ${result.artifacts.cutoutRawReportsJson}\n`);
   }
   if (result.artifacts.selectionPlanRequestJson) {
     process.stdout.write(`Selection plan request: ${result.artifacts.selectionPlanRequestJson}\n`);

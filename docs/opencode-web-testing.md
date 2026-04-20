@@ -38,9 +38,9 @@ RA=51.12015772112324, DEC=-26.971838908444358, radiusArcsec=250.0
 - preview统计（preview rows / 可筛选字段 / 前3条样例）
 - 结果文件绝对路径（逐行）：
 candidate_pool.csv
-preview_100.csv
-preview_summary.json
-filtered.csv
+preview_10.csv
+selection_final.csv
+selection_report.json
 report.md
 result_index.json
 （若存在）region_adjust_request.json
@@ -91,15 +91,15 @@ radiusArcsec=250.0
    - DESI 首次命中数
    - 若重试：半径与第二次命中数
    - preview统计：`preview rows`、`available filter fields`、前3条样例
-   - 示例记录（最多3条）
-     - 文件绝对路径（逐行）：
-      candidate_pool.csv
-     preview_100.csv
-     preview_summary.json
-     filtered.csv
-     report.md
-     result_index.json
-     region_adjust_request.json(如存在)
+    - 示例记录（最多3条）
+      - 文件绝对路径（逐行）：
+       candidate_pool.csv
+      preview_10.csv
+      selection_final.csv
+      selection_report.json
+      report.md
+      result_index.json
+      region_adjust_request.json(如存在)
    - 下一步建议（若 crossmatch=0 也必须给）
 
 约束：

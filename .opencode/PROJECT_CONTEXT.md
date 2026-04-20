@@ -15,8 +15,20 @@
 ## 输入与路由
 
 - 支持输入：`radec_text`、`s3_uri`
-- 默认执行模式：`pipeline_strict`
-- `pipeline_strict` 下，agent 负责对话收集参数，执行统一走 `runMvpPipeline`。
+- Web 交互默认执行模式：`interactive_debug`
+- 批处理/一键回归默认执行模式：`pipeline_strict`
+
+## Agent 交互规范（开发阶段）
+
+- 先交互、后执行：默认不要一上来直接 `npx`/`npm run run`。
+- 每步都要有明确结构：`STEP` / `GOAL` / `ACTION` / `RESULT`。
+- Web 页面中禁止 one-shot 一键产出最终结果；必须按 playbook 步骤逐步执行。
+- 仅本地自测/回归允许使用 `npx`/`npm run run` 一键执行。
+- 开发阶段优先可解释性与可观测性，历史兼容和旧路径规则可丢弃。
+
+## 数据策略
+
+- 当前阶段仅保留真实数据流程，不保留开发回退分支。
 
 ## 关键规则
 
@@ -25,8 +37,19 @@
 - 对于 `RA/DEC` 输入：通过 MCP 解析 `tile_id`。
 - `candidate_pool.csv` 必须包含固定字段名（值可空），尤其：
   - 星表字段：`type, RIGHT_ASCENSION, DECLINATION, SEMIMAJOR_AXIS, SEGMENTATION_AREA, FLUX_SEGMENTATION, FLUX_VIS_1FWHM_APER, FLUX_VIS_2FWHM_APER, FLUX_VIS_3FWHM_APER, FLUX_VIS_4FWHM_APER`
-  - Euclid 图像路径：`euclid_fits_path`
-  - DESI 图像路径：`desi_fits_g_path, desi_fits_r_path, desi_fits_i_path, desi_fits_z_path, desi_tractor_i_fits_path`
+  - Euclid 路径字段：`euclid_fits_path, euclid_path_source`
+  - DESI 路径字段：`desi_tractor_i_fits_path, desi_tractor_fits_path, desi_image_g_path, desi_image_r_path, desi_image_i_path, desi_image_z_path`
+
+## 路径规则（当前生效）
+
+- Euclid：按 tile 目录调用 `list_catalogs`，优先 `BGSUB-MOSAIC-VIS`。
+- Euclid 无匹配时：允许写 pattern 路径，但必须标记
+  - `euclid_path_source=euclid-catalog.list_catalogs:fallback_pattern`
+  - `missing_reasons` 包含 `euclid_fits_path_generated_pattern`
+- DESI：统一 S3 规则
+  - `desi_tractor_i_fits_path -> .../tractor-i/<pre>/tractor-i-<brick>.fits`
+  - `desi_tractor_fits_path -> .../tractor/<pre>/tractor-<brick>.fits`
+  - `desi_image_[g/r/i/z]_path -> .../coadd/<pre>/<brick>/legacysurvey-<brick>-image-<band>.fits.fz`
 
 ## 望远镜处理要点
 

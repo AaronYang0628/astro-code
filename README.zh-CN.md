@@ -20,7 +20,7 @@
 - `src/orchestrator/`: TypeScript 编排在 MVP 实现
 - `py/workers/`: Python 辅助脚本（用于本地数据处理工具）
 - `.opencode/agents|skills|plugins/`: 智能体运行时契约
-- `runs/`: 运行时输出（`status.json`、`candidate_pool.csv`、`preview_100.csv`、`filtered.csv`）
+- `runs/`: 运行时输出（`status.json`、`candidate_pool.csv`、`preview_10.csv`、`selection_final.csv`）
 - `docs/`: 架构和契约文档
 
 ## 快速开始
@@ -41,8 +41,8 @@ npm run run:mvp
 3) 检查 `runs/<run_id>/` 下的输出文件
 
 - `candidate_pool.csv`
-- `preview_100.csv`
-- `filtered.csv`
+- `preview_10.csv`
+- `selection_final.csv`（仅在明确完成六条件筛选后生成）
 - `stats.json`
 - `report.md`
 
@@ -78,8 +78,8 @@ npx tsx src/orchestrator/index.ts \
 
 结果写入 `runs/<run_id>/`：
 - `candidate_pool.csv`
-- `preview_100.csv`
-- `filtered.csv`
+- `preview_10.csv`
+- `selection_final.csv`
 - `stats.json`
 - `report.md`
 - `result_index.json`
@@ -111,6 +111,57 @@ npx tsx src/orchestrator/index.ts \
   - `native`：仅 OpenCode 原生弹框
   - `octto`：仅 octto 交互
   - `hybrid`：优先 octto，失败时切 native
+- 本地 cutout worker（无需单独 MCP 服务）：`py/workers/cutout_stamp_worker.py`。
+
+## Cutout 小图（本地 worker）
+
+建议使用筛选后的 `selection_final.csv` 生成 Euclid/DESI FITS stamp：
+
+```bash
+python3 py/workers/cutout_stamp_worker.py \
+  --input-csv runs/<run_id>/selection_final.csv \
+  --output-dir runs/<run_id>/cutouts
+```
+
+说明：
+
+- worker 会按源 FITS 路径分组，同一张图一次打开切多个目标，减少 IO。
+- Euclid 使用 `euclid_fits_path`；DESI 使用 `desi_image_g/r/i/z_path`。
+- 若 CSV 中是 S3 路径，可通过可重复参数 `--path-map SRC=DST` 做本地映射。
+- 输出目录包含 `cutout_index.csv` 与 `cutout_report.json`。
+
+## 远程 cutout MCP 执行
+
+当远程 `fits-cutout` MCP 可用时，orchestrator 可直接对 S3 图像执行分组 cutout（无需本地挂载大文件）。
+
+请求示例：
+
+```json
+{
+  "workflow": "euclid_cutout",
+  "input": { "type": "s3_uri", "value": "s3://.../catalog.fits" },
+  "interaction": "web",
+  "selection": {
+    "conditions": [
+      { "id": "oversized_galaxy_filter", "params": { "stamp_size_px": 160 } }
+    ]
+  },
+  "selection_confirmed": true,
+  "cutout": {
+    "enabled": true,
+    "mcp_server": "fits-cutout",
+    "output_prefix": "s3://data-and-computing/projects/CSST/shared-data/astro/cutouts",
+    "size_deg": 0.008,
+    "desi_bands": ["g", "r", "i", "z"]
+  }
+}
+```
+
+运行产物会新增：
+
+- `cutout_index.csv`
+- `cutout_report.json`
+- `cutout_raw_reports.json`
 
 ## Octto 插件
 

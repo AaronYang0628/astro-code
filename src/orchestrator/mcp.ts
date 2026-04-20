@@ -131,6 +131,15 @@ function getEuclidObjects(payload: Record<string, unknown>): Record<string, unkn
   return objects.filter((obj): obj is Record<string, unknown> => typeof obj === "object" && obj !== null);
 }
 
+function getToolError(payload: Record<string, unknown>): string | undefined {
+  const direct = toStringOrUndefined(payload.error);
+  if (direct) {
+    return direct;
+  }
+  const normalized = unwrapEuclidToolPayload(payload);
+  return toStringOrUndefined(normalized.error);
+}
+
 function getEuclidCatalogEntries(payload: Record<string, unknown>): Record<string, unknown>[] {
   const normalized = unwrapEuclidToolPayload(payload);
   const catalogs = normalized.catalogs;
@@ -446,6 +455,43 @@ function normalizeTileId(value: unknown): string | undefined {
   return embedded?.[1];
 }
 
+function tileSegmentationRange(tileId: string): { gte: number; lte: number } | null {
+  if (!/^\d{6,12}$/.test(tileId)) {
+    return null;
+  }
+  const tileNum = Number(tileId);
+  if (!Number.isFinite(tileNum)) {
+    return null;
+  }
+  const gte = tileNum * 1_000_000;
+  const lte = gte + 999_999;
+  if (!Number.isSafeInteger(gte) || !Number.isSafeInteger(lte)) {
+    return null;
+  }
+  return { gte, lte };
+}
+
+function buildEuclidTileLookupQuery(tileId: string): Record<string, unknown> {
+  const should: Record<string, unknown>[] = [
+    { term: { TILE_INDEX: tileId } },
+    { term: { tile_index: tileId } },
+    { term: { TILEID: tileId } },
+    { term: { tileid: tileId } }
+  ];
+
+  const segRange = tileSegmentationRange(tileId);
+  if (segRange) {
+    should.push({ range: { SEGMENTATION_MAP_ID: segRange } });
+  }
+
+  return {
+    bool: {
+      should,
+      minimum_should_match: 1
+    }
+  };
+}
+
 function toBase36Digit(ch: string): number | null {
   const c = ch.charCodeAt(0);
   if (c >= 48 && c <= 57) {
@@ -628,9 +674,12 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
     throw new Error("S3 input must use s3://bucket/key format.");
   }
 
-  const info = await callMcpTool(EUCLID_SERVER, "get_catalog_info_with_stats", {
+  const infoRaw = await callMcpTool(EUCLID_SERVER, "get_catalog_info_with_stats", {
     catalog_path: uri
   }) as Record<string, unknown>;
+
+  const info = unwrapEuclidToolPayload(infoRaw);
+  const infoError = getToolError(infoRaw);
 
   const ranges = (info.coordinate_ranges as Record<string, unknown> | undefined) ?? {};
   const raMin = toNumber(ranges.ra_min);
@@ -638,8 +687,118 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
   const decMin = toNumber(ranges.dec_min);
   const decMax = toNumber(ranges.dec_max);
 
-  if (raMin === null || raMax === null || decMin === null || decMax === null) {
-    throw new Error("Euclid MCP did not return coordinate_ranges for S3 input.");
+  if (raMin !== null && raMax !== null && decMin !== null && decMax !== null) {
+    return {
+      ra_deg: (raMin + raMax) / 2,
+      dec_deg: (decMin + decMax) / 2,
+      ra_min: raMin,
+      ra_max: raMax,
+      dec_min: decMin,
+      dec_max: decMax,
+      s3_path: uri,
+      num_objects: toNumber(info.num_objects) ?? undefined,
+      source: "mcp_s3_reader"
+    };
+  }
+
+  const rowsRaw = await callMcpTool(EUCLID_SERVER, "get_catalog_objects", {
+    catalog_path: uri,
+    start: 0,
+    limit: 256,
+    columns: ["RIGHT_ASCENSION", "DECLINATION"]
+  }) as Record<string, unknown>;
+  const objects = getEuclidObjects(rowsRaw);
+  const objectsError = getToolError(rowsRaw);
+
+  let raMinFallback = Number.POSITIVE_INFINITY;
+  let raMaxFallback = Number.NEGATIVE_INFINITY;
+  let decMinFallback = Number.POSITIVE_INFINITY;
+  let decMaxFallback = Number.NEGATIVE_INFINITY;
+
+  for (const obj of objects) {
+    const { ra, dec } = pickCoord(obj);
+    if (ra === null || dec === null) {
+      continue;
+    }
+    if (ra < raMinFallback) raMinFallback = ra;
+    if (ra > raMaxFallback) raMaxFallback = ra;
+    if (dec < decMinFallback) decMinFallback = dec;
+    if (dec > decMaxFallback) decMaxFallback = dec;
+  }
+
+  if (
+    !Number.isFinite(raMinFallback)
+    || !Number.isFinite(raMaxFallback)
+    || !Number.isFinite(decMinFallback)
+    || !Number.isFinite(decMaxFallback)
+  ) {
+    const tileId = extractTileIdFromPath(uri);
+    if (tileId) {
+      const tileCoord = await extractCoordFromTileIndexViaAstro(tileId);
+      if (tileCoord) {
+        return {
+          ...tileCoord,
+          s3_path: uri,
+          source: "astro_k3s_mcp.euclid_tile_index_fallback"
+        };
+      }
+    }
+
+    const reasons = [
+      infoError ? `get_catalog_info_with_stats_error=${infoError}` : null,
+      objectsError ? `get_catalog_objects_error=${objectsError}` : null
+    ].filter((v): v is string => v !== null);
+    const detail = reasons.length > 0 ? ` (${reasons.join("; ")})` : "";
+    throw new Error(`Euclid MCP did not return coordinate_ranges and no valid RA/DEC rows were found in S3 objects${detail}.`);
+  }
+
+  return {
+    ra_deg: (raMinFallback + raMaxFallback) / 2,
+    dec_deg: (decMinFallback + decMaxFallback) / 2,
+    ra_min: raMinFallback,
+    ra_max: raMaxFallback,
+    dec_min: decMinFallback,
+    dec_max: decMaxFallback,
+    s3_path: uri,
+    num_objects: objects.length,
+    source: "mcp_s3_reader_objects_fallback"
+  };
+}
+
+async function extractCoordFromTileIndexViaAstro(tileId: string): Promise<Coord | null> {
+  const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+    catalog: "euclid-q1-mer-final",
+    mode: "search",
+    body: {
+      query: buildEuclidTileLookupQuery(tileId),
+      from: 0,
+      size: 1000,
+      _source: ["RIGHT_ASCENSION", "DECLINATION", "TILE_INDEX", "TILEID", "SEGMENTATION_MAP_ID"]
+    }
+  }) as Record<string, unknown>;
+
+  const hitRows = getHitRows(payload);
+  let raMin = Number.POSITIVE_INFINITY;
+  let raMax = Number.NEGATIVE_INFINITY;
+  let decMin = Number.POSITIVE_INFINITY;
+  let decMax = Number.NEGATIVE_INFINITY;
+  let count = 0;
+
+  for (const hit of hitRows) {
+    const source = (hit._source as Record<string, unknown> | undefined) ?? hit;
+    const { ra, dec } = pickCoord(source);
+    if (ra === null || dec === null) {
+      continue;
+    }
+    if (ra < raMin) raMin = ra;
+    if (ra > raMax) raMax = ra;
+    if (dec < decMin) decMin = dec;
+    if (dec > decMax) decMax = dec;
+    count += 1;
+  }
+
+  if (!Number.isFinite(raMin) || !Number.isFinite(raMax) || !Number.isFinite(decMin) || !Number.isFinite(decMax)) {
+    return null;
   }
 
   return {
@@ -649,10 +808,124 @@ export async function extractCoordFromS3Mcp(uri: string): Promise<Coord> {
     ra_max: raMax,
     dec_min: decMin,
     dec_max: decMax,
-    s3_path: uri,
-    num_objects: toNumber(info.num_objects) ?? undefined,
-    source: "mcp_s3_reader"
+    num_objects: getHitsTotal(payload) || count,
+    source: "astro_k3s_mcp.euclid_tile_index"
   };
+}
+
+function mapEuclidCatalogRecord(source: Record<string, unknown>, fallbackObjectId: string): CatalogRecord | null {
+  const { ra, dec } = pickCoord(source);
+  if (ra === null || dec === null) {
+    return null;
+  }
+
+  let tileIndex = normalizeTileId(
+    source.TILE_INDEX
+    ?? source.tile_index
+    ?? source.TILEID
+    ?? source.tileid
+  );
+  if (!tileIndex) {
+    tileIndex = extractTileIdFromPath(toStringOrUndefined(source.source_path));
+  }
+
+  return {
+    catalog: "euclid",
+    object_id: String(
+      source.OBJECT_ID
+      ?? source.object_id
+      ?? source.SOURCE_ID
+      ?? source.source_id
+      ?? source.TARGET_ID
+      ?? source.target_id
+      ?? fallbackObjectId
+    ),
+    obj_id: String(
+      source.OBJECT_ID
+      ?? source.object_id
+      ?? source.SOURCE_ID
+      ?? source.source_id
+      ?? source.TARGET_ID
+      ?? source.target_id
+      ?? fallbackObjectId
+    ),
+    ra_deg: ra,
+    dec_deg: dec,
+    mag: fluxToMagEuclidMuJy(toNumber(source.FLUX_VIS_1FWHM_APER))
+      ?? firstFinite([
+        source.MAG_VIS,
+        source.mag_vis,
+        source.MAG_AUTO,
+        source.mag_auto,
+        source.mag,
+        source.MAG
+      ]),
+    mag_proxy: fluxToMagEuclidMuJy(toNumber(source.FLUX_VIS_1FWHM_APER))
+      ?? firstFinite([
+        source.MAG_VIS,
+        source.mag_vis,
+        source.MAG_AUTO,
+        source.mag_auto,
+        source.mag,
+        source.MAG
+      ]),
+    type: normalizeType(inferEuclidTypeLabel(source), ""),
+    class_label: String(
+      source.EXTENDED_FLAG
+      ?? source.extended_flag
+      ?? source.type
+      ?? source.TYPE
+      ?? "unknown"
+    ),
+    tile_index: tileIndex,
+    tile_index_source: tileIndex ? "euclid.native_field" : "pending_ra_dec_to_tile_mapping",
+    maskbits: toNumber(source.MASKBITS ?? source.maskbits) ?? undefined,
+    seg_area: toNumber(
+      source.SEGMENTATION_AREA
+      ?? source.segmentation_area
+      ?? source.SEG_AREA
+      ?? source.seg_area
+    ) ?? undefined,
+    det_quality_flag: toNumber(source.DET_QUALITY_FLAG ?? source.det_quality_flag) ?? undefined,
+    flag_vis: toNumber(source.FLAG_VIS ?? source.flag_vis) ?? undefined,
+    point_like_flag: toNumber(source.POINT_LIKE_FLAG ?? source.point_like_flag) ?? undefined,
+    extended_flag: toNumber(source.EXTENDED_FLAG ?? source.extended_flag) ?? undefined,
+    semimajor_axis: toNumber(source.SEMIMAJOR_AXIS ?? source.semimajor_axis) ?? undefined,
+    flux_segmentation: toNumber(source.FLUX_SEGMENTATION ?? source.flux_segmentation) ?? undefined,
+    flux_vis_1fwhm_aper: toNumber(source.FLUX_VIS_1FWHM_APER ?? source.flux_vis_1fwhm_aper) ?? undefined,
+    flux_vis_2fwhm_aper: toNumber(source.FLUX_VIS_2FWHM_APER ?? source.flux_vis_2fwhm_aper) ?? undefined,
+    flux_vis_3fwhm_aper: toNumber(source.FLUX_VIS_3FWHM_APER ?? source.flux_vis_3fwhm_aper) ?? undefined,
+    flux_vis_4fwhm_aper: toNumber(source.FLUX_VIS_4FWHM_APER ?? source.flux_vis_4fwhm_aper) ?? undefined,
+    flux_vis_psf: toNumber(source.FLUX_VIS_PSF ?? source.flux_vis_psf) ?? undefined,
+    flux_vis_sersic: toNumber(source.FLUX_VIS_SERSIC ?? source.flux_vis_sersic) ?? undefined
+  };
+}
+
+async function queryEuclidRowsByTileIndexViaAstro(tileId: string, topK: number): Promise<CatalogRecord[]> {
+  const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+    catalog: "euclid-q1-mer-final",
+    mode: "search",
+    body: {
+      query: buildEuclidTileLookupQuery(tileId),
+      from: 0,
+      size: topK
+    }
+  }) as Record<string, unknown>;
+
+  const hitRows = getHitRows(payload);
+  const rows: CatalogRecord[] = [];
+
+  for (const hit of hitRows) {
+    const source = (hit._source as Record<string, unknown> | undefined) ?? hit;
+    const mapped = mapEuclidCatalogRecord(source, `EUCLID_${rows.length + 1}`);
+    if (mapped) {
+      mapped.tile_index = mapped.tile_index ?? tileId;
+      mapped.tile_index_source = mapped.tile_index_source === "euclid.native_field" ? mapped.tile_index_source : "euclid.s3_path_filename";
+      rows.push(mapped);
+    }
+  }
+
+  return rows;
 }
 
 async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecord[]> {
@@ -692,88 +965,18 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
 
       const hitObj = hit as Record<string, unknown>;
       const source = (hitObj._source as Record<string, unknown> | undefined) ?? hitObj;
-      const { ra, dec } = pickCoord(source);
-      if (ra === null || dec === null) {
+      const mapped = mapEuclidCatalogRecord(source, String(hitObj._id ?? `EUCLID_${rows.length + 1}`));
+      if (!mapped) {
         continue;
       }
 
-      let tileIndex = normalizeTileId(
-        source.TILE_INDEX
-        ?? source.tile_index
-        ?? source.TILEID
-        ?? source.tileid
-      );
-      let tileIndexSource = tileIndex ? "euclid.native_field" : "pending_ra_dec_to_tile_mapping";
-      if (!tileIndex) {
-        const resolvedTile = await resolveTileIdByCoord(ra, dec);
-        tileIndex = resolvedTile.tile_id;
-        tileIndexSource = resolvedTile.source;
+      if (!mapped.tile_index) {
+        const resolvedTile = await resolveTileIdByCoord(mapped.ra_deg, mapped.dec_deg);
+        mapped.tile_index = resolvedTile.tile_id;
+        mapped.tile_index_source = resolvedTile.source;
       }
 
-      rows.push({
-        catalog: "euclid",
-        object_id: String(
-          source.OBJECT_ID
-          ?? source.object_id
-          ?? hitObj._id
-          ?? `EUCLID_${rows.length + 1}`
-        ),
-        obj_id: String(
-          source.OBJECT_ID
-          ?? source.object_id
-          ?? hitObj._id
-          ?? `EUCLID_${rows.length + 1}`
-        ),
-        ra_deg: ra,
-        dec_deg: dec,
-        mag: fluxToMagEuclidMuJy(toNumber(source.FLUX_VIS_1FWHM_APER))
-          ?? firstFinite([
-            source.MAG_VIS,
-            source.mag_vis,
-            source.MAG_AUTO,
-            source.mag_auto,
-            source.mag,
-            source.MAG
-          ]),
-        mag_proxy: fluxToMagEuclidMuJy(toNumber(source.FLUX_VIS_1FWHM_APER))
-          ?? firstFinite([
-            source.MAG_VIS,
-            source.mag_vis,
-            source.MAG_AUTO,
-            source.mag_auto,
-            source.mag,
-            source.MAG
-          ]),
-        type: normalizeType(inferEuclidTypeLabel(source), ""),
-        class_label: String(
-          source.EXTENDED_FLAG
-          ?? source.extended_flag
-          ?? source.type
-          ?? source.TYPE
-          ?? "unknown"
-        ),
-        tile_index: tileIndex,
-        tile_index_source: tileIndexSource,
-        maskbits: toNumber(source.MASKBITS ?? source.maskbits) ?? undefined,
-        seg_area: toNumber(
-          source.SEGMENTATION_AREA
-          ?? source.segmentation_area
-          ?? source.SEG_AREA
-          ?? source.seg_area
-        ) ?? undefined,
-        det_quality_flag: toNumber(source.DET_QUALITY_FLAG ?? source.det_quality_flag) ?? undefined,
-        flag_vis: toNumber(source.FLAG_VIS ?? source.flag_vis) ?? undefined,
-        point_like_flag: toNumber(source.POINT_LIKE_FLAG ?? source.point_like_flag) ?? undefined,
-        extended_flag: toNumber(source.EXTENDED_FLAG ?? source.extended_flag) ?? undefined,
-        semimajor_axis: toNumber(source.SEMIMAJOR_AXIS ?? source.semimajor_axis) ?? undefined,
-        flux_segmentation: toNumber(source.FLUX_SEGMENTATION ?? source.flux_segmentation) ?? undefined,
-        flux_vis_1fwhm_aper: toNumber(source.FLUX_VIS_1FWHM_APER ?? source.flux_vis_1fwhm_aper) ?? undefined,
-        flux_vis_2fwhm_aper: toNumber(source.FLUX_VIS_2FWHM_APER ?? source.flux_vis_2fwhm_aper) ?? undefined,
-        flux_vis_3fwhm_aper: toNumber(source.FLUX_VIS_3FWHM_APER ?? source.flux_vis_3fwhm_aper) ?? undefined,
-        flux_vis_4fwhm_aper: toNumber(source.FLUX_VIS_4FWHM_APER ?? source.flux_vis_4fwhm_aper) ?? undefined,
-        flux_vis_psf: toNumber(source.FLUX_VIS_PSF ?? source.flux_vis_psf) ?? undefined,
-        flux_vis_sersic: toNumber(source.FLUX_VIS_SERSIC ?? source.flux_vis_sersic) ?? undefined
-      });
+      rows.push(mapped);
     }
 
     return rows;
@@ -815,6 +1018,7 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
   }) as Record<string, unknown>;
 
   const objects = getEuclidObjects(payload);
+  const objectsError = getToolError(payload);
   const rows: CatalogRecord[] = [];
 
   for (const obj of objects) {
@@ -841,45 +1045,31 @@ async function queryEuclidRows(coord: Coord, topK: number): Promise<CatalogRecor
       tileIndexSource = resolvedTile.source;
     }
 
-    rows.push({
-      catalog: "euclid",
-      object_id: String(pickAny(record, ["OBJECT_ID", "object_id", "SOURCE_ID", "source_id", "TARGET_ID", "target_id"]) ?? `EUCLID_${rows.length + 1}`),
-      obj_id: String(pickAny(record, ["OBJECT_ID", "object_id", "SOURCE_ID", "source_id", "TARGET_ID", "target_id"]) ?? `EUCLID_${rows.length + 1}`),
-      ra_deg: ra,
-      dec_deg: dec,
-      mag: fluxToMagEuclidMuJy(pickNumber(record, ["FLUX_VIS_1FWHM_APER", "flux_vis_1fwhm_aper"]) ?? null)
-        ?? firstFinite([
-          pickAny(record, ["MAG_VIS", "mag_vis"]),
-          pickAny(record, ["MAG_AUTO", "mag_auto"]),
-          pickAny(record, ["MAG", "mag"])
-        ]),
-      mag_proxy: fluxToMagEuclidMuJy(pickNumber(record, ["FLUX_VIS_1FWHM_APER", "flux_vis_1fwhm_aper"]) ?? null)
-        ?? firstFinite([
-          pickAny(record, ["MAG_VIS", "mag_vis"]),
-          pickAny(record, ["MAG_AUTO", "mag_auto"]),
-          pickAny(record, ["MAG", "mag"])
-        ]),
-      class_label: "unknown",
-      type: normalizeType(inferEuclidTypeLabel(record), ""),
-      tile_index: tileIndex,
-      tile_index_source: tileIndexSource,
-      maskbits: pickNumber(record, ["MASKBITS", "maskbits"]),
-      seg_area: pickNumber(record, ["SEGMENTATION_AREA", "segmentation_area", "SEG_AREA", "seg_area"]),
-      det_quality_flag: pickNumber(record, ["DET_QUALITY_FLAG", "det_quality_flag"]),
-      flag_vis: pickNumber(record, ["FLAG_VIS", "flag_vis"]),
-      point_like_flag: pickNumber(record, ["POINT_LIKE_FLAG", "point_like_flag"]),
-      extended_flag: pickNumber(record, ["EXTENDED_FLAG", "extended_flag"]),
-      semimajor_axis: pickNumber(record, ["SEMIMAJOR_AXIS", "semimajor_axis"]),
-      flux_segmentation: pickNumber(record, ["FLUX_SEGMENTATION", "flux_segmentation"]),
-      flux_vis_1fwhm_aper: pickNumber(record, ["FLUX_VIS_1FWHM_APER", "flux_vis_1fwhm_aper"]),
-      flux_vis_2fwhm_aper: pickNumber(record, ["FLUX_VIS_2FWHM_APER", "flux_vis_2fwhm_aper"]),
-      flux_vis_3fwhm_aper: pickNumber(record, ["FLUX_VIS_3FWHM_APER", "flux_vis_3fwhm_aper"]),
-      flux_vis_4fwhm_aper: pickNumber(record, ["FLUX_VIS_4FWHM_APER", "flux_vis_4fwhm_aper"]),
-      flux_vis_psf: pickNumber(record, ["FLUX_VIS_PSF", "flux_vis_psf"]),
-      flux_vis_sersic: pickNumber(record, ["FLUX_VIS_SERSIC", "flux_vis_sersic"])
-    });
+    const mapped = mapEuclidCatalogRecord(record, `EUCLID_${rows.length + 1}`);
+    if (!mapped) {
+      continue;
+    }
+
+    mapped.tile_index = tileIndex;
+    mapped.tile_index_source = tileIndexSource;
+    rows.push(mapped);
   }
 
+  if (rows.length > 0) {
+    return rows;
+  }
+
+  const tileId = extractTileIdFromPath(coord.s3_path);
+  if (tileId) {
+    const fallbackRows = await queryEuclidRowsByTileIndexViaAstro(tileId, topK);
+    if (fallbackRows.length > 0) {
+      return fallbackRows;
+    }
+  }
+
+  if (objectsError) {
+    return [];
+  }
   return rows;
 }
 
@@ -1105,84 +1295,6 @@ export async function queryDesiByBricknamesWithDetails(
       source_path: sourcePath.value,
       source_path_field: sourcePath.field,
       note: `DESI query by brickname terms (count=${unique.length})`
-    }
-  };
-}
-
-export async function queryDesiSeedRowsMcpWithDetails(
-  topK: number
-): Promise<DesiQueryDetails> {
-  const queryBody = {
-    query: {
-      bool: {
-        filter: [
-          { term: { brick_primary: true } }
-        ]
-      }
-    },
-    from: 0,
-    size: topK
-  };
-
-  const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
-    catalog: "desi-dr10-tractor",
-    mode: "search",
-    body: queryBody
-  }) as Record<string, unknown>;
-
-  const sampleBody = {
-    ...queryBody,
-    size: 3,
-    _source: [
-      "OBJECT_ID",
-      "TARGETID",
-      "ra",
-      "dec",
-      "type",
-      "brick_primary",
-      "source_path",
-      "path",
-      "uri",
-      "s3_path"
-    ]
-  };
-
-  const samplePayload = await callMcpTool(ASTRO_SERVER, "es_query", {
-    catalog: "desi-dr10-tractor",
-    mode: "search",
-    body: sampleBody
-  }) as Record<string, unknown>;
-
-  const hitRows = getHitRows(payload);
-  const rows = mapDesiRowsFromHitRows(hitRows);
-  const sampleRows = mapDesiSampleRows(samplePayload);
-
-  const firstSource = hitRows.length > 0
-    ? (((hitRows[0]._source as Record<string, unknown> | undefined) ?? hitRows[0]) as Record<string, unknown>)
-    : {};
-  const sourcePath = detectSourcePath(firstSource);
-
-  return {
-    rows,
-    hitsTotal: getHitsTotal(payload),
-    queryWindow: {
-      ra_min: Number.NaN,
-      ra_max: Number.NaN,
-      dec_min: Number.NaN,
-      dec_max: Number.NaN
-    },
-    queryBody,
-    rawPayload: payload,
-    samplePayload,
-    sampleRows,
-    origin: {
-      source_system: "astro_k3s_mcp",
-      catalog: "desi-dr10-tractor",
-      backend_type: "mcp_es_index",
-      storage_hint: inferStorageHint(sourcePath.value),
-      source_path: sourcePath.value,
-      source_path_field: sourcePath.field,
-      note: "DESI seed rows for mock fallback from ES index via MCP"
     }
   };
 }

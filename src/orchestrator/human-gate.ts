@@ -29,7 +29,7 @@ interface SelectionGateContext {
 }
 
 export interface HumanGateResult {
-  mode: "region_adjust" | "mock_continue" | "none";
+  mode: "region_adjust" | "none";
   requestFile?: string;
 }
 
@@ -52,34 +52,6 @@ const SELECTION_CONDITION_IDS: SelectionConditionId[] = [
 const DEFAULT_SELECTION_PLAN: SelectionPlan = {
   conditions: []
 };
-
-function parseZeroResultAction(response: unknown): "region_adjust" | "mock_continue" | undefined {
-  if (typeof response !== "object" || response === null) {
-    return undefined;
-  }
-
-  const record = response as Record<string, unknown>;
-  const direct = record.action;
-  if (typeof direct === "string") {
-    const v = direct.trim().toLowerCase();
-    if (v === "region_adjust" || v === "mock_continue") {
-      return v;
-    }
-  }
-
-  const selected = record.selected;
-  if (Array.isArray(selected) && selected.length > 0) {
-    const labels = selected.map((item) => String(item).toLowerCase());
-    if (labels.some((label) => label.includes("mock"))) {
-      return "mock_continue";
-    }
-    if (labels.some((label) => label.includes("region") || label.includes("adjust") || label.includes("real"))) {
-      return "region_adjust";
-    }
-  }
-
-  return undefined;
-}
 
 function normalizeSelectionConditionId(value: unknown): SelectionConditionId | undefined {
   if (typeof value !== "string") {
@@ -211,9 +183,10 @@ export async function resolveSelectionPlan(
   interaction: InteractionMode,
   interactionBackend: InteractionBackend,
   context: SelectionGateContext,
-  inlineSelection?: SelectionPlan
+  inlineSelection?: SelectionPlan,
+  selectionConfirmed = false
 ): Promise<SelectionGateResult> {
-  if (inlineSelection && Array.isArray(inlineSelection.conditions) && inlineSelection.conditions.length > 0) {
+  if (interaction !== "web" && inlineSelection && Array.isArray(inlineSelection.conditions) && inlineSelection.conditions.length > 0) {
     return {
       mode: "selected",
       plan: inlineSelection
@@ -297,6 +270,15 @@ export async function resolveSelectionPlan(
 
   fs.writeFileSync(requestPath, JSON.stringify(requestBody, null, 2));
 
+  if (inlineSelection && Array.isArray(inlineSelection.conditions) && inlineSelection.conditions.length > 0 && selectionConfirmed) {
+    return {
+      mode: "selected",
+      plan: inlineSelection,
+      requestFile: requestPath,
+      responseFile: fs.existsSync(responsePath) ? responsePath : undefined
+    };
+  }
+
   const parsed = fs.existsSync(responsePath)
     ? parseSelectionPlan(JSON.parse(fs.readFileSync(responsePath, "utf8")))
     : undefined;
@@ -334,11 +316,6 @@ export async function resolveHumanFilter(
             id: "region_adjust",
             label: "Use real-data region adjust",
             description: "Keep real data only; change region/radius and rerun"
-          },
-          {
-            id: "mock_continue",
-            label: "Use mock data to continue",
-            description: "Development mode: generate mock continuation artifacts"
           }
         ],
         response_file: zeroActionResponsePath
@@ -368,17 +345,6 @@ export async function resolveHumanFilter(
     };
 
     fs.writeFileSync(regionRequestPath, JSON.stringify(regionRequest, null, 2));
-
-    const action = fs.existsSync(zeroActionResponsePath)
-      ? parseZeroResultAction(JSON.parse(fs.readFileSync(zeroActionResponsePath, "utf8")))
-      : undefined;
-
-    if (action === "mock_continue") {
-      return {
-        mode: "mock_continue",
-        requestFile: regionRequestPath
-      };
-    }
 
     return {
       mode: "region_adjust",

@@ -12,6 +12,11 @@
       "enabled": true,
       "oauth": false,
       "timeout": 15000
+    },
+    "fits-cutout": {
+      "type": "remote",
+      "url": "http://fits-cutout-mcp.mcp.svc.cluster.local:8000/mcp",
+      "enabled": true
     }
   },
   "provider": {
@@ -58,10 +63,14 @@
       }
     },
     "orchestrator-agent": {
-      "permission": "allow"
+      "permission": {
+        "question": "allow"
+      }
     },
     "filter-agent": {
-      "permission": "allow"
+      "permission": {
+        "question": "allow"
+      }
     }
   }
 }

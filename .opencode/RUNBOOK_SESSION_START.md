@@ -31,9 +31,9 @@
 - 打印 preview 摘要与 markdown 表格样例
 - 打印结果文件绝对路径：
   - `candidate_pool.csv`
-  - `preview_100.csv`
-  - `preview_summary.json`
-  - `filtered.csv`
+  - `preview_10.csv`
+  - `selection_final.csv`
+  - `selection_report.json`
   - `report.md`
   - `result_index.json`
 
