@@ -117,6 +117,9 @@ async function main(): Promise<void> {
   if (candidatePoolCsv) {
     process.stdout.write(`Candidate pool CSV: ${candidatePoolCsv}\n`);
   }
+  if (result.artifacts.candidatePoolInternalJson) {
+    process.stdout.write(`Candidate pool internal JSON: ${result.artifacts.candidatePoolInternalJson}\n`);
+  }
   if (result.artifacts.desiOriginJson) {
     process.stdout.write(`DESI origin: ${result.artifacts.desiOriginJson}\n`);
   }

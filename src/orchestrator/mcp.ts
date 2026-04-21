@@ -1182,6 +1182,37 @@ export async function queryCatalogMcp(
   return details.rows;
 }
 
+export async function resolveTileIdForS3Input(catalogPath: string): Promise<{ tileId?: string; source: string }> {
+  const fromPath = normalizeTileId(extractTileIdFromPath(catalogPath));
+  if (fromPath) {
+    return { tileId: fromPath, source: "s3_path_filename" };
+  }
+
+  const payload = await callMcpTool(EUCLID_SERVER, "resolve_tile_id", {
+    catalog_path: catalogPath,
+  }) as Record<string, unknown>;
+  const normalized = unwrapEuclidToolPayload(payload);
+  const toolError = getToolError(payload);
+  if (toolError) {
+    throw new Error(`resolve_tile_id_error=${toolError}`);
+  }
+
+  const tileId = normalizeTileId(normalized.tile_id);
+  const method = toStringOrUndefined((normalized.mapping as Record<string, unknown> | undefined)?.method) ?? "resolve_tile_id";
+  return {
+    tileId,
+    source: tileId ? `euclid.resolve_tile_id:${method}` : "euclid.resolve_tile_id:missing"
+  };
+}
+
+export async function queryEuclidRowsByTileOnly(tileId: string, topK: number): Promise<CatalogRecord[]> {
+  const normalizedTile = normalizeTileId(tileId);
+  if (!normalizedTile) {
+    return [];
+  }
+  return queryEuclidRowsByTileIndexViaAstro(normalizedTile, topK);
+}
+
 export async function queryDesiMcpWithDetails(
   coord: Coord,
   topK: number,

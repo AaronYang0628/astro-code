@@ -52,6 +52,8 @@ export interface RunRequest {
   input: InputSpec;
   execution_mode?: "pipeline_strict" | "interactive_debug";
   workflow?: "euclid_desi_crossmatch" | "euclid_cutout" | "desi_cutout" | string;
+  resume_run_id?: string;
+  resume_run_dir?: string;
   radiusArcsec?: number;
   topK?: number;
   previewRows?: number;
@@ -74,6 +76,7 @@ export interface RunArtifacts {
   desiSearchRetryRawJson?: string;
   desiSearchRetrySampleRawJson?: string;
   candidatePoolCsv?: string;
+  candidatePoolInternalJson?: string;
   previewCsv?: string;
   statsJson: string;
   reportMd: string;

@@ -60,6 +60,7 @@
 2. Matching phase has only one filtering stage: six-condition selection.
 3. Do not run secondary human filter gate after selection.
 4. Keep all run artifacts under `runs/<run_id>/`.
+5. Never fabricate completion by hand-writing status/result files.
 
 ## Tile and path rules
 
@@ -73,11 +74,28 @@
 
 ## Path policy
 
-- Euclid: use `list_catalogs` in tile VIS dir and prefer `BGSUB-MOSAIC-VIS`.
-- If no Euclid match: write pattern path and mark
-  - `euclid_path_source=euclid-catalog.list_catalogs:fallback_pattern`
-  - add `euclid_fits_path_generated_pattern` into `missing_reasons`.
+- Euclid single-star-table flow: trust resolved input/MCP path; do not invent legacy wildcard prefixes.
 - DESI paths must be S3 style (tractor-i, tractor, coadd image) from `brickname`.
+
+## Cutout execution contract (must follow)
+
+- `execute_cutout_group` calls MUST include `targets`.
+- Build `targets` from selected rows with fields:
+  - `obj_id`
+  - `row_index`
+  - `ra_deg`
+  - `dec_deg`
+  - optional: `tile_index`, `brickname`
+- Do not call `execute_cutout_group` without `targets` (schema error is operator fault).
+- Retry policy in web debug:
+  - batch serially (default batch size = 1 unless user says otherwise)
+  - max one retry for the same batch
+  - after retry failure, continue next batch and summarize failed row indices
+- Do not hand-edit `status.json` / `result_index.json` to mark success/failure.
+- Only write cutout artifacts from actual tool responses:
+  - `cutout_index.csv`
+  - `cutout_report.json`
+  - `cutout_raw_reports.json`
 
 ## Required artifact outputs
 

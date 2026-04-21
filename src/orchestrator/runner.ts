@@ -7,7 +7,7 @@ import { buildCandidatePoolFromEuclidOnly, crossmatchCatalogs } from "./crossmat
 import { resolveHumanFilter, resolveSelectionPlan } from "./human-gate.js";
 import { createRunDir, ensureDir, writeCsv, writeJson, writeReport } from "./io.js";
 import { setMcpCallLogger } from "./mcp-client.js";
-import { queryCatalogMcp, queryDesiByBricknamesWithDetails, queryDesiMcpWithDetails, resolveEuclidMerVisFitsPathByTile } from "./mcp.js";
+import { queryCatalogMcp, queryDesiMcpWithDetails, queryEuclidRowsByTileOnly, resolveEuclidMerVisFitsPathByTile, resolveTileIdForS3Input } from "./mcp.js";
 import type { DesiQueryDetails } from "./mcp.js";
 import { loadPlaybook } from "./playbook.js";
 import { applySelectionPlan } from "./selection.js";
@@ -22,6 +22,31 @@ function toBrickPrefix(brickname: string): string {
 const EUCLID_MER_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/euclid/aws-mirrors/q1/MER";
 const DESI_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south";
 const DESI_TRACTOR_S3_BASE = "s3://data-and-computing/projects/projects/CSST/shared-data/desi/dr10/south";
+const OUTPUT_COLUMNS = [
+  "obj_id",
+  "tile_index",
+  "brickname",
+  "type",
+  "RIGHT_ASCENSION",
+  "DECLINATION",
+  "SEMIMAJOR_AXIS",
+  "SEGMENTATION_AREA",
+  "FLUX_SEGMENTATION",
+  "FLUX_VIS_1FWHM_APER",
+  "FLUX_VIS_2FWHM_APER",
+  "FLUX_VIS_3FWHM_APER",
+  "FLUX_VIS_4FWHM_APER",
+  "path_source",
+  "missing_reasons",
+  "euclid_path_source",
+  "euclid_fits_path",
+  "desi_tractor_fits_path",
+  "desi_tractor_i_fits_path",
+  "desi_image_g_path",
+  "desi_image_r_path",
+  "desi_image_i_path",
+  "desi_image_z_path"
+] as const;
 
 function buildDesiTractorIPath(brickname: string): string {
   const p = toBrickPrefix(brickname);
@@ -97,9 +122,18 @@ function isPathLike(value: string | null | undefined): boolean {
   return value.startsWith("s3://") || value.startsWith("http://") || value.startsWith("https://") || value.startsWith("/");
 }
 
-function normalizeEuclidFitsPath(value: string | null | undefined, tileId: string | null): string | null {
+function normalizeEuclidFitsPath(
+  value: string | null | undefined,
+  tileId: string | null,
+  pathSource: string | null
+): string | null {
   if (isPathLike(value)) {
-    return value as string;
+    const path = value as string;
+    const fromFallback = (pathSource ?? "").includes("fallback_pattern");
+    if (fromFallback && tileId) {
+      return `${EUCLID_MER_S3_BASE}/${tileId}/VIS/EUC_MER_BGSUB-MOSAIC-VIS_TILE${tileId}-*.fits`;
+    }
+    return path;
   }
   if (tileId) {
     return `${EUCLID_MER_S3_BASE}/${tileId}/VIS/EUC_MER_BGSUB-MOSAIC-VIS_TILE${tileId}-*.fits`;
@@ -134,7 +168,8 @@ function normalizeCandidatePaths(rows: CrossmatchRecord[]): CrossmatchRecord[] {
 
     const euclidFits = normalizeEuclidFitsPath(
       typeof row.euclid_fits_path === "string" ? row.euclid_fits_path : null,
-      tileId
+      tileId,
+      typeof row.euclid_path_source === "string" ? row.euclid_path_source : null
     );
 
     const tractorIFits = normalizeDesiFitsPath(
@@ -167,6 +202,64 @@ function normalizeCandidatePaths(rows: CrossmatchRecord[]): CrossmatchRecord[] {
       desi_image_z_path: z
     };
   });
+}
+
+function removeMissingReasonTag(value: string, tag: string): string {
+  const parts = value
+    .split(";")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0 && v !== "none" && v !== tag);
+  return parts.length > 0 ? parts.join(";") : "none";
+}
+
+function pinEuclidFitsPathToInput(rows: CrossmatchRecord[], s3Path: string): CrossmatchRecord[] {
+  return rows.map((row) => ({
+    ...row,
+    euclid_fits_path: s3Path,
+    euclid_vis_path_pattern: s3Path,
+    euclid_path_source: "input.s3_uri",
+    missing_reasons: removeMissingReasonTag(row.missing_reasons, "euclid_fits_path_generated_pattern")
+  }));
+}
+
+function coordFromEuclidRows(rows: CatalogRecord[]): Coord | null {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  let raMin = Number.POSITIVE_INFINITY;
+  let raMax = Number.NEGATIVE_INFINITY;
+  let decMin = Number.POSITIVE_INFINITY;
+  let decMax = Number.NEGATIVE_INFINITY;
+  let count = 0;
+
+  for (const row of rows) {
+    const ra = Number(row.ra_deg);
+    const dec = Number(row.dec_deg);
+    if (!Number.isFinite(ra) || !Number.isFinite(dec)) {
+      continue;
+    }
+    if (ra < raMin) raMin = ra;
+    if (ra > raMax) raMax = ra;
+    if (dec < decMin) decMin = dec;
+    if (dec > decMax) decMax = dec;
+    count += 1;
+  }
+
+  if (count === 0) {
+    return null;
+  }
+
+  return {
+    ra_deg: (raMin + raMax) / 2,
+    dec_deg: (decMin + decMax) / 2,
+    ra_min: raMin,
+    ra_max: raMax,
+    dec_min: decMin,
+    dec_max: decMax,
+    num_objects: count,
+    source: "astro_k3s_mcp.euclid_tile_index"
+  };
 }
 
 function appendMissingReason(base: string, reason: string): string {
@@ -339,6 +432,7 @@ function buildArtifactPathMap(artifacts: RunArtifacts): Record<string, string | 
     desi_search_retry_raw_json: artifacts.desiSearchRetryRawJson,
     desi_search_retry_sample_raw_json: artifacts.desiSearchRetrySampleRawJson,
     candidate_pool_csv: artifacts.candidatePoolCsv,
+    candidate_pool_internal_json: artifacts.candidatePoolInternalJson,
     preview_csv: artifacts.previewCsv,
     selection_final_csv: artifacts.selectionFinalCsv,
     selection_report_json: artifacts.selectionReportJson,
@@ -439,7 +533,28 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   }
 
   ensureDir(config.paths.runs_dir);
-  const { runId, runDir } = createRunDir(config.paths.runs_dir);
+  const resumeRunDir = typeof request.resume_run_dir === "string" && request.resume_run_dir.trim().length > 0
+    ? path.resolve(request.resume_run_dir.trim())
+    : undefined;
+  const resumeRunId = typeof request.resume_run_id === "string" && request.resume_run_id.trim().length > 0
+    ? request.resume_run_id.trim()
+    : undefined;
+
+  let runId: string;
+  let runDir: string;
+  if (resumeRunDir || resumeRunId) {
+    runDir = resumeRunDir
+      ?? path.resolve(config.paths.runs_dir, resumeRunId as string);
+    if (!fs.existsSync(runDir)) {
+      throw new Error(`resume run dir not found: ${runDir}`);
+    }
+    const base = path.basename(runDir);
+    runId = resumeRunId ?? base;
+  } else {
+    const created = createRunDir(config.paths.runs_dir);
+    runId = created.runId;
+    runDir = created.runDir;
+  }
   const statusJson = path.join(runDir, "status.json");
   const mcpCallLogFile = path.join(runDir, "mcp_call_log.txt");
   const progress = options.progress;
@@ -501,6 +616,8 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   };
   writeRunStatus(statusJson, runStatus);
 
+  const resumeOnlySelection = Boolean(resumeRunDir || resumeRunId);
+
   try {
     if (request.input.type !== "radec_text" && request.input.type !== "s3_uri") {
       throw new Error(`Input type ${String(request.input.type)} is disabled by policy. Supported input types: radec_text, s3_uri.`);
@@ -542,6 +659,276 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     progress?.(`Workflow: ${workflow}`);
   }
 
+  if (resumeOnlySelection) {
+    step("selection-resume", "resume existing run and continue from confirmed selection", "load candidate pool from existing artifacts and apply selection plan directly");
+    const candidatePoolInternalJson = path.join(runDir, "candidate_pool.internal.json");
+    const candidatePoolCsv = path.join(runDir, "candidate_pool.csv");
+    const previewRowsWritten = Math.min(previewRows, 10);
+    const previewCsv = path.join(runDir, `preview_${previewRowsWritten}.csv`);
+    const selectionFinalCsv = path.join(runDir, "selection_final.csv");
+    const selectionReportJson = path.join(runDir, "selection_report.json");
+    const cutoutIndexCsv = path.join(runDir, "cutout_index.csv");
+    const cutoutReportJson = path.join(runDir, "cutout_report.json");
+    const cutoutRawReportsJson = path.join(runDir, "cutout_raw_reports.json");
+
+    if (!fs.existsSync(candidatePoolInternalJson)) {
+      throw new Error(`resume requires existing candidate_pool.internal.json: ${candidatePoolInternalJson}`);
+    }
+    const crossmatchTruncated = JSON.parse(fs.readFileSync(candidatePoolInternalJson, "utf8")) as CrossmatchRecord[];
+    const previewSample = crossmatchTruncated.slice(0, 10) as unknown as Record<string, unknown>[];
+    const availableFilterFields = [...OUTPUT_COLUMNS];
+
+    const selectionGate = await resolveSelectionPlan(
+      runDir,
+      interaction,
+      config.runtime.interaction_backend,
+      {
+        runId,
+        candidatePoolRows: crossmatchTruncated.length,
+        previewSample
+      },
+      effectiveRequest.selection,
+      effectiveRequest.selection_confirmed === true
+    );
+
+    if (interaction === "web" && selectionGate.mode !== "selected") {
+      writeJson(selectionReportJson, {
+        run_id: runId,
+        mode: "waiting_user_selection",
+        selection_required: true,
+        request_file: selectionGate.requestFile ?? null,
+        response_file: selectionGate.responseFile ?? null,
+        confirmation_received: selectionGate.confirmationReceived ?? false,
+        response_present: selectionGate.responsePresent ?? false,
+        message: selectionGate.reason ?? "Web mode requires explicit popup confirmation before applying selection plan.",
+        available_filter_fields: availableFilterFields,
+        preview_sample: previewSample,
+        candidate_pool_rows: crossmatchTruncated.length
+      });
+
+      const waitingArtifacts: RunArtifacts = {
+        statusJson,
+        inputManifestJson,
+        candidatePoolCsv,
+        candidatePoolInternalJson,
+        previewCsv,
+        selectionReportJson,
+        selectionPlanRequestJson: selectionGate.requestFile,
+        selectionPlanResponseJson: selectionGate.responseFile,
+        statsJson,
+        reportMd,
+        resultIndexJson
+      };
+
+      writeJson(resultIndexJson, {
+        run_id: runId,
+        output_dir: runDir,
+        status: "waiting_selection",
+        resume_mode: true,
+        selection_required: true,
+        candidate_pool_rows: crossmatchTruncated.length,
+        artifacts: buildArtifactPathMap(waitingArtifacts)
+      });
+
+      writeJson(statsJson, {
+        run_id: runId,
+        resume_mode: true,
+        status: "waiting_selection",
+        selection_required: true,
+        candidate_pool_rows: crossmatchTruncated.length,
+        artifact_paths: buildArtifactPathMap(waitingArtifacts)
+      });
+
+      runStatus.state = "waiting_selection";
+      runStatus.current_phase = "selection";
+      runStatus.current_step = "await_selection_plan";
+      runStatus.metrics = {
+        ...(runStatus.metrics ?? {}),
+        selection_candidate_rows: crossmatchTruncated.length,
+        selection_rows: 0,
+        filtered_rows: 0
+      };
+      runStatus.artifacts = {
+        ...buildArtifactPathMap(waitingArtifacts),
+        mcp_call_log_txt: mcpCallLogFile
+      };
+      writeRunStatus(statusJson, runStatus);
+
+      return {
+        runId,
+        runDir,
+        artifacts: waitingArtifacts,
+        summary: {
+          mode: "pipeline",
+          candidatePoolRows: crossmatchTruncated.length,
+          previewRows: Math.min(crossmatchTruncated.length, previewRowsWritten),
+          filteredRows: 0,
+          selectionRequired: true,
+          executionMode: "ts_orchestrator",
+          cutoutEnabled: false,
+          cutoutGroupsTotal: 0,
+          cutoutSuccessRows: 0,
+          cutoutFailedRows: 0,
+          availableFilterFields,
+          previewSample,
+          humanGateMode: "none"
+        }
+      };
+    }
+
+    const selectionResult = applySelectionPlan(crossmatchTruncated, selectionGate.plan);
+    writeCsv(selectionFinalCsv, selectionResult.selected_rows as unknown as Record<string, unknown>[], [...OUTPUT_COLUMNS]);
+    writeJson(selectionReportJson, {
+      run_id: runId,
+      mode: selectionGate.mode,
+      request_file: selectionGate.requestFile ?? null,
+      response_file: selectionGate.responseFile ?? null,
+      requested_conditions: selectionResult.requested_conditions,
+      effective_order: selectionResult.effective_order,
+      step_logs: selectionResult.steps,
+      candidate_rows_after_quality: selectionResult.candidate_rows_after_quality.length,
+      final_selected_rows: selectionResult.selected_rows.length
+    });
+
+    const filtered = selectionResult.selected_rows;
+    const cutoutEnabled = resolveCutoutEnabled(effectiveRequest.cutout?.enabled, isEuclidSingleWorkflow);
+    const cutoutShouldExecute = shouldExecuteCutout(cutoutEnabled, filtered.length);
+    let cutoutGroupsTotal = 0;
+    let cutoutSuccessRows = 0;
+    let cutoutFailedRows = 0;
+    let cutoutServerName = "fits-cutout";
+    let cutoutOutputPrefix: string | undefined;
+
+    if (cutoutShouldExecute) {
+      step("cutout-execute", "execute grouped FITS cutout via remote MCP", "group selection rows by source image and invoke fits-cutout MCP");
+      cutoutServerName = typeof effectiveRequest.cutout?.mcp_server === "string" && effectiveRequest.cutout.mcp_server.trim().length > 0
+        ? effectiveRequest.cutout.mcp_server.trim()
+        : "fits-cutout";
+      cutoutOutputPrefix = typeof effectiveRequest.cutout?.output_prefix === "string" && effectiveRequest.cutout.output_prefix.trim().length > 0
+        ? effectiveRequest.cutout.output_prefix.trim()
+        : undefined;
+      const cutoutSizeDeg = Number.isFinite(Number(effectiveRequest.cutout?.size_deg))
+        ? Number(effectiveRequest.cutout?.size_deg)
+        : 0.008;
+      const cutoutBands = normalizeCutoutBands(effectiveRequest.cutout?.desi_bands);
+      const cutoutSummary = await executeGroupedCutoutViaMcp({
+        runId,
+        rows: filtered,
+        serverName: cutoutServerName,
+        outputPrefix: cutoutOutputPrefix,
+        sizeDeg: cutoutSizeDeg,
+        desiBands: cutoutBands,
+        targetBatchSize: 1,
+        progress
+      });
+      cutoutGroupsTotal = cutoutSummary.groups_total;
+      cutoutSuccessRows = cutoutSummary.records.filter((row) => row.status === "ok").length;
+      cutoutFailedRows = cutoutSummary.records.filter((row) => row.status !== "ok").length;
+      writeCsv(cutoutIndexCsv, cutoutSummary.records as unknown as Record<string, unknown>[]);
+      writeJson(cutoutRawReportsJson, cutoutSummary.raw_reports);
+      writeJson(cutoutReportJson, {
+        run_id: runId,
+        requested: cutoutSummary.requested,
+        server: cutoutSummary.server,
+        output_prefix: cutoutOutputPrefix ?? "service_default",
+        groups_total: cutoutGroupsTotal,
+        targets_total: cutoutSummary.targets_total,
+        groups_succeeded: cutoutSummary.groups_succeeded,
+        groups_failed: cutoutSummary.groups_failed,
+        success_rows: cutoutSuccessRows,
+        failed_rows: cutoutFailedRows,
+        index_csv: cutoutIndexCsv,
+        raw_reports_json: cutoutRawReportsJson
+      });
+    }
+
+    const artifacts: RunArtifacts = {
+      statusJson,
+      inputManifestJson,
+      candidatePoolCsv,
+      candidatePoolInternalJson,
+      previewCsv,
+      selectionFinalCsv,
+      selectionReportJson,
+      selectionPlanRequestJson: selectionGate.requestFile,
+      selectionPlanResponseJson: selectionGate.responseFile,
+      cutoutIndexCsv: cutoutShouldExecute ? cutoutIndexCsv : undefined,
+      cutoutReportJson: cutoutShouldExecute ? cutoutReportJson : undefined,
+      cutoutRawReportsJson: cutoutShouldExecute ? cutoutRawReportsJson : undefined,
+      statsJson,
+      reportMd,
+      resultIndexJson
+    };
+
+    writeJson(resultIndexJson, {
+      run_id: runId,
+      output_dir: runDir,
+      resume_mode: true,
+      candidate_pool_rows: crossmatchTruncated.length,
+      selection_rows: selectionResult.selected_rows.length,
+      cutout_enabled: cutoutEnabled,
+      cutout_groups_total: cutoutGroupsTotal,
+      cutout_success_rows: cutoutSuccessRows,
+      cutout_failed_rows: cutoutFailedRows,
+      artifacts: buildArtifactPathMap(artifacts)
+    });
+
+    writeJson(statsJson, {
+      run_id: runId,
+      resume_mode: true,
+      candidate_pool_rows: crossmatchTruncated.length,
+      selection_rows: selectionResult.selected_rows.length,
+      cutout: {
+        enabled: cutoutEnabled,
+        executed: cutoutShouldExecute,
+        server: cutoutShouldExecute ? cutoutServerName : null,
+        output_prefix: cutoutShouldExecute ? (cutoutOutputPrefix ?? "service_default") : null,
+        groups_total: cutoutGroupsTotal,
+        success_rows: cutoutSuccessRows,
+        failed_rows: cutoutFailedRows
+      },
+      artifact_paths: buildArtifactPathMap(artifacts)
+    });
+
+    runStatus.state = "completed";
+    runStatus.current_phase = "completed";
+    runStatus.current_step = "done";
+    runStatus.metrics = {
+      ...(runStatus.metrics ?? {}),
+      selection_rows: selectionResult.selected_rows.length,
+      filtered_rows: selectionResult.selected_rows.length,
+      cutout_groups_total: cutoutGroupsTotal,
+      cutout_success_rows: cutoutSuccessRows,
+      cutout_failed_rows: cutoutFailedRows
+    };
+    runStatus.artifacts = {
+      ...buildArtifactPathMap(artifacts),
+      mcp_call_log_txt: mcpCallLogFile
+    };
+    writeRunStatus(statusJson, runStatus);
+
+    return {
+      runId,
+      runDir,
+      artifacts,
+      summary: {
+        mode: "pipeline",
+        candidatePoolRows: crossmatchTruncated.length,
+        previewRows: Math.min(crossmatchTruncated.length, previewRowsWritten),
+        filteredRows: selectionResult.selected_rows.length,
+        selectionRequired: false,
+        executionMode: "ts_orchestrator",
+        cutoutEnabled,
+        cutoutGroupsTotal,
+        cutoutSuccessRows,
+        cutoutFailedRows,
+        availableFilterFields,
+        previewSample,
+        humanGateMode: "none"
+      }
+    };
+  }
+
   step("input-router", "validate input source and normalize workflow routing", "read request input and map to playbook workflow");
   if (effectiveRequest.input.type === "radec_text") {
     progress?.(`Input value (RA/DEC text): ${effectiveRequest.input.value}`);
@@ -550,21 +937,48 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   }
   stepResult(`input source accepted: ${effectiveRequest.input.type}`);
 
-  step("coord-extractor", "extract query coordinate by input source", "resolve RA/DEC from s3 or radec_text");
+  step("coord-extractor", "extract query coordinate by input source", "resolve tile/rows first for euclid single s3 flow; otherwise resolve RA/DEC by source");
   runStatus.current_phase = "extract_coord";
   runStatus.current_step = "extract_coordinate";
   writeRunStatus(statusJson, runStatus);
   let coord: Coord;
+  let euclidRowsSeed: CatalogRecord[] | null = null;
   const extractedTileId = effectiveRequest.input.type === "s3_uri"
     ? ((effectiveRequest.input.value.match(/TILE(\d{6,12})/i)?.[1]
       ?? effectiveRequest.input.value.match(/(?:^|[_\-/])(\d{9})(?:[_\-.]|$)/)?.[1]
       ?? null) as string | null)
     : null;
   try {
-    coord = await extractCoord(effectiveRequest.input, config.runtime.python_bin);
-    stepResult(`coordinate extraction success: source=${coord.source}, RA=${coord.ra_deg}, DEC=${coord.dec_deg}`);
-    if (extractedTileId) {
-      progress?.(`Coord note: extracted tile_id=${extractedTileId} from s3 path; MCP S3 tools are still attempted first for direct coordinate ranges before tile/index fallback.`);
+    if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri") {
+      const tileResolved = await resolveTileIdForS3Input(effectiveRequest.input.value);
+      const tileId = tileResolved.tileId ?? extractedTileId;
+      if (!tileId) {
+        throw new Error("Unable to resolve tile_id from input s3 uri.");
+      }
+      progress?.(`MCP call (input-router): server=euclid-catalog, tool=resolve_tile_id, tile_id=${tileId}`);
+
+      euclidRowsSeed = await queryEuclidRowsByTileOnly(tileId, topK);
+      if (euclidRowsSeed.length === 0) {
+        throw new Error(`No Euclid rows found for tile_id=${tileId} via astro_k3s_mcp.es_query.`);
+      }
+      progress?.(`MCP call (input-router): server=astro_k3s_mcp, tool=es_query, catalog=euclid-q1-mer-final, tile_id=${tileId}, rows=${euclidRowsSeed.length}`);
+
+      const derived = coordFromEuclidRows(euclidRowsSeed);
+      if (!derived) {
+        throw new Error(`Euclid rows for tile_id=${tileId} do not contain valid RA/DEC.`);
+      }
+      coord = {
+        ...derived,
+        s3_path: effectiveRequest.input.value,
+        source: "astro_k3s_mcp.euclid_tile_index_from_input_router"
+      };
+      stepResult(`coordinate extraction success: tile_id=${tileId}, source=${coord.source}, RA=${coord.ra_deg}, DEC=${coord.dec_deg}, euclid_rows=${euclidRowsSeed.length}`);
+    } else {
+      coord = await extractCoord(effectiveRequest.input, config.runtime.python_bin);
+      stepResult(`coordinate extraction success: source=${coord.source}, RA=${coord.ra_deg}, DEC=${coord.dec_deg}`);
+      if (extractedTileId) {
+        progress?.(`Coord note: extracted tile_id=${extractedTileId} from s3 path; MCP S3 tools are still attempted first for direct coordinate ranges before tile/index fallback.`);
+      }
     }
   } catch (error) {
     stepResult(`coordinate extraction failed: ${errorMessage(error)}`);
@@ -577,8 +991,14 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   runStatus.current_phase = "query";
   runStatus.current_step = "query_euclid";
   writeRunStatus(statusJson, runStatus);
-  progress?.(`MCP call (euclid): server=euclid-catalog|astro_k3s_mcp, tool=get_catalog_info_with_stats|get_catalog_objects|es_query, source=${coord.source}`);
-  let euclidRows = await queryCatalogMcp("euclid", coord, topK);
+  let euclidRows: CatalogRecord[];
+  if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri" && euclidRowsSeed) {
+    euclidRows = euclidRowsSeed;
+    progress?.(`MCP call (euclid): skipped additional query; using input-router rows=${euclidRows.length}`);
+  } else {
+    progress?.(`MCP call (euclid): server=euclid-catalog|astro_k3s_mcp, tool=get_catalog_info_with_stats|get_catalog_objects|es_query, source=${coord.source}`);
+    euclidRows = await queryCatalogMcp("euclid", coord, topK);
+  }
   stepResult(`euclid rows loaded: ${euclidRows.length}`);
   runStatus.metrics = { ...(runStatus.metrics ?? {}), euclid_rows: euclidRows.length };
   writeRunStatus(statusJson, runStatus);
@@ -625,7 +1045,31 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   let desiRetryRawJson: string | undefined;
   let desiRetrySampleRawJson: string | undefined;
 
-  {
+  if (isEuclidSingleWorkflow) {
+    writeJson(desiSearchQueryJson, {
+      catalog: "desi-dr10-tractor",
+      mode: "skipped",
+      reason: "euclid_single_workflow"
+    });
+    writeJson(desiSearchInitialRawJson, {
+      skipped: true,
+      reason: "euclid_single_workflow"
+    });
+    writeJson(desiSearchSampleRawJson, {
+      skipped: true,
+      reason: "euclid_single_workflow"
+    });
+    writeJson(desiOriginJson, {
+      source_system: "astro_k3s_mcp",
+      catalog: "desi-dr10-tractor",
+      backend_type: "mcp_es_index",
+      storage_hint: "unknown",
+      source_path: null,
+      source_path_field: null,
+      note: "DESI query skipped by euclid single workflow"
+    });
+    progress?.("MCP call (desi): skipped by euclid single workflow");
+  } else {
     progress?.("MCP call (desi): server=astro_k3s_mcp, tool=es_query, mode=search, catalog=desi-dr10-tractor");
     desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: 1 });
     desiRows = desiDetails.rows;
@@ -667,7 +1111,6 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       progress?.(`DESI raw response (retry): ${desiRetryRawJson}`);
       progress?.(`DESI sample response (retry,size=3): ${desiRetrySampleRawJson}`);
     }
-
   }
 
   runStatus.metrics = {
@@ -701,45 +1144,16 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     });
 
   if (isEuclidSingleWorkflow) {
-    const bricknames = [...new Set(crossmatched
-      .map((row) => row.brickname)
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0))];
-    if (bricknames.length > 0) {
-      progress?.(`MCP call (desi by brickname): count=${bricknames.length}`);
-      const desiByBrick = await queryDesiByBricknamesWithDetails(bricknames, topK);
-      desiRows = desiByBrick.rows;
-      desiDetails = desiByBrick;
-      desiRowsInitial = desiRows.length;
-      desiHitsTotalInitial = desiDetails.hitsTotal;
-      writeJson(desiSearchQueryJson, {
-        catalog: "desi-dr10-tractor",
-        mode: "search",
-        strategy: "brickname_terms",
-        bricknames,
-        query_body: desiDetails.queryBody,
-        top_k: topK,
-        query_center: {
-          ra_deg: coord.ra_deg,
-          dec_deg: coord.dec_deg
-        }
-      });
-      writeJson(desiSearchInitialRawJson, desiDetails.rawPayload);
-      writeJson(desiSearchSampleRawJson, desiDetails.samplePayload);
-      writeJson(desiOriginJson, desiDetails.origin);
-      progress?.(`DESI by brickname hits: rows=${desiRows.length}, hits_total=${desiDetails.hitsTotal}`);
-
-      const enrichedEuclidRows = enrichEuclidOnlyWithDesiContext(euclidRows, desiRows);
-      const recrossmatched = buildCandidatePoolFromEuclidOnly(
-        enrichedEuclidRows,
-        {
-          ra_deg: coord.ra_deg,
-          dec_deg: coord.dec_deg
-        },
-        radiusArcsec,
-        { byObjectId: brickResolve.byObjectId }
-      );
-      crossmatched = recrossmatched;
-    }
+    const enrichedEuclidRows = enrichEuclidOnlyWithDesiContext(euclidRows, []);
+    crossmatched = buildCandidatePoolFromEuclidOnly(
+      enrichedEuclidRows,
+      {
+        ra_deg: coord.ra_deg,
+        dec_deg: coord.dec_deg
+      },
+      radiusArcsec,
+      { byObjectId: brickResolve.byObjectId }
+    );
   }
   const requiredT1Fields = ["obj_id", "ra", "dec", "tile_index", "brickname", "maskbits", "mag_proxy", "seg_area"] as const;
   const t1MissingCounts: Record<string, number> = {
@@ -783,6 +1197,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const euclidQueryCsv = path.join(runDir, "euclid_query.csv");
   const desiQueryCsv = path.join(runDir, "desi_query.csv");
   const candidatePoolCsv = path.join(runDir, "candidate_pool.csv");
+  const candidatePoolInternalJson = path.join(runDir, "candidate_pool.internal.json");
   const previewRowsWritten = Math.min(previewRows, 10);
   const previewCsv = path.join(runDir, `preview_${previewRowsWritten}.csv`);
 
@@ -858,39 +1273,20 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   ]);
 
   let crossmatchTruncated = normalizeCandidatePaths(crossmatched.slice(0, maxResultRows));
-  crossmatchTruncated = await hydrateEuclidFitsPaths(crossmatchTruncated);
+  if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri") {
+    crossmatchTruncated = pinEuclidFitsPathToInput(crossmatchTruncated, effectiveRequest.input.value);
+  } else {
+    crossmatchTruncated = await hydrateEuclidFitsPaths(crossmatchTruncated);
+  }
   const preview = crossmatchTruncated.slice(0, previewRowsWritten);
   const previewSample = preview.slice(0, 10) as unknown as Record<string, unknown>[];
-  const outputColumns = [
-    "obj_id",
-    "tile_index",
-    "brickname",
-    "type",
-    "RIGHT_ASCENSION",
-    "DECLINATION",
-    "SEMIMAJOR_AXIS",
-    "SEGMENTATION_AREA",
-    "FLUX_SEGMENTATION",
-    "FLUX_VIS_1FWHM_APER",
-    "FLUX_VIS_2FWHM_APER",
-    "FLUX_VIS_3FWHM_APER",
-    "FLUX_VIS_4FWHM_APER",
-    "path_source",
-    "missing_reasons",
-    "euclid_path_source",
-    "euclid_fits_path",
-    "desi_tractor_fits_path",
-    "desi_tractor_i_fits_path",
-    "desi_image_g_path",
-    "desi_image_r_path",
-    "desi_image_i_path",
-    "desi_image_z_path"
-  ] as const;
+  const outputColumns = OUTPUT_COLUMNS;
   const availableFilterFields = [...outputColumns];
 
   writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
   writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
   writeCsv(candidatePoolCsv, crossmatchTruncated as unknown as Record<string, unknown>[], [...outputColumns]);
+  writeJson(candidatePoolInternalJson, crossmatchTruncated);
   step("preview-export", "export candidate pool preview for user inspection", "write preview CSV for interactive selection");
   writeCsv(previewCsv, preview as unknown as Record<string, unknown>[], [...outputColumns]);
   const previewMarkdown = toMarkdownTable(previewSample, [...outputColumns]);
@@ -996,6 +1392,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       desiSearchRetryRawJson: desiRetryRawJson,
       desiSearchRetrySampleRawJson: desiRetrySampleRawJson,
       candidatePoolCsv,
+      candidatePoolInternalJson,
       previewCsv,
       selectionReportJson,
       selectionPlanRequestJson: selectionGate.requestFile,
@@ -1061,6 +1458,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       `- preview_rows_written: ${preview.length}`,
       `- preview_csv: ${previewCsv}`,
       `- selection_plan_request_json: ${selectionGate.requestFile ?? "n/a"}`,
+      `- candidate_pool_internal_json: ${candidatePoolInternalJson}`,
       `- selection_report_json: ${selectionReportJson}`,
       `- next_action: complete popup selection + confirmation receipt, then rerun with selection_confirmed=true`
     ]);
@@ -1082,6 +1480,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
     progress?.("Selection required (web): waiting for explicit six-condition plan.");
     progress?.(`Artifacts: candidate_pool=${candidatePoolCsv}`);
+    progress?.(`Artifacts: candidate_pool_internal=${candidatePoolInternalJson}`);
     progress?.(`Artifacts: preview=${previewCsv}`);
     if (selectionGate.requestFile) {
       progress?.(`Artifacts: selection_plan_request=${selectionGate.requestFile}`);
@@ -1157,6 +1556,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       outputPrefix: cutoutOutputPrefix,
       sizeDeg: cutoutSizeDeg,
       desiBands: cutoutBands,
+      targetBatchSize: 1,
       progress
     });
 
@@ -1274,6 +1674,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       desiSearchRetryRawJson: desiRetryRawJson,
       desiSearchRetrySampleRawJson: desiRetrySampleRawJson,
       candidatePoolCsv,
+      candidatePoolInternalJson,
       previewCsv,
       selectionFinalCsv,
       selectionReportJson,
@@ -1306,6 +1707,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     desiSearchRetryRawJson: desiRetryRawJson,
     desiSearchRetrySampleRawJson: desiRetrySampleRawJson,
     candidatePoolCsv,
+    candidatePoolInternalJson,
     previewCsv,
     selectionFinalCsv,
     selectionReportJson,

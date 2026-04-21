@@ -59,7 +59,17 @@ interface ExecuteGroupedCutoutOptions {
   outputPrefix?: string;
   sizeDeg: number;
   desiBands: DesiBand[];
+  targetBatchSize?: number;
   progress?: (line: string) => void;
+}
+
+function chunkTargets(targets: CutoutTargetPayload[], size: number): CutoutTargetPayload[][] {
+  const batchSize = Math.max(1, Math.floor(size));
+  const out: CutoutTargetPayload[][] = [];
+  for (let i = 0; i < targets.length; i += batchSize) {
+    out.push(targets.slice(i, i + batchSize));
+  }
+  return out;
 }
 
 function toFinite(value: unknown): number | null {
@@ -190,6 +200,14 @@ export async function executeGroupedCutoutViaMcp(
 ): Promise<CutoutExecutionSummary> {
   const groups = buildCutoutGroups(options.rows, options.desiBands);
   const targetsTotal = groups.reduce((sum, group) => sum + group.targets.length, 0);
+  const effectiveBatchSize = Math.max(
+    1,
+    Math.floor(
+      Number.isFinite(Number(options.targetBatchSize))
+        ? Number(options.targetBatchSize)
+        : Number(process.env.CUTOUT_TARGET_BATCH_SIZE ?? "1")
+    )
+  );
 
   const records: CutoutIndexRecord[] = [];
   const rawReports: Record<string, unknown>[] = [];
@@ -198,73 +216,84 @@ export async function executeGroupedCutoutViaMcp(
   let groupsFailed = 0;
 
   for (const group of groups) {
-    options.progress?.(`Cutout group: telescope=${group.telescope}, band=${group.band}, targets=${group.targets.length}`);
-    try {
-      const raw = await callMcpTool(options.serverName, "execute_cutout_group", {
-        run_id: options.runId,
-        telescope: group.telescope,
-        band: group.band,
-        source_uri: group.source_uri,
-        targets: group.targets,
-        size_deg: options.sizeDeg,
-        output_prefix: options.outputPrefix,
-        resolve_wildcard: true
-      }) as unknown;
+    options.progress?.(`Cutout group: telescope=${group.telescope}, band=${group.band}, targets=${group.targets.length}, batch_size=${effectiveBatchSize}`);
+    let groupHasError = false;
+    const batches = chunkTargets(group.targets, effectiveBatchSize);
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      const batchTargets = batches[batchIndex];
+      options.progress?.(`Cutout batch: ${batchIndex + 1}/${batches.length}, targets=${batchTargets.length}`);
+      try {
+        const raw = await callMcpTool(options.serverName, "execute_cutout_group", {
+          run_id: options.runId,
+          telescope: group.telescope,
+          band: group.band,
+          source_uri: group.source_uri,
+          targets: batchTargets,
+          size_deg: options.sizeDeg,
+          output_prefix: options.outputPrefix,
+          resolve_wildcard: true
+        }) as unknown;
 
-      const report = asObject(raw) ?? {};
-      rawReports.push(report);
+        const report = asObject(raw) ?? {};
+        rawReports.push(report);
 
-      const resolvedSourceUri = typeof report.resolved_source_uri === "string"
-        ? report.resolved_source_uri
-        : undefined;
+        const resolvedSourceUri = typeof report.resolved_source_uri === "string"
+          ? report.resolved_source_uri
+          : undefined;
 
-      const resultRows = Array.isArray(report.results)
-        ? report.results.filter((item): item is Record<string, unknown> => asObject(item) !== null)
-        : [];
+        const resultRows = Array.isArray(report.results)
+          ? report.results.filter((item): item is Record<string, unknown> => asObject(item) !== null)
+          : [];
 
-      if (typeof report.error === "string") {
-        groupsFailed += 1;
-      } else {
-        groupsSucceeded += 1;
-      }
+        if (resultRows.length === 0 && typeof report.error === "string") {
+          groupHasError = true;
+          for (const target of batchTargets) {
+            records.push({
+              status: "error",
+              telescope: group.telescope,
+              band: group.band,
+              source_uri: group.source_uri,
+              resolved_source_uri: resolvedSourceUri,
+              row_index: target.row_index,
+              obj_id: target.obj_id,
+              ra_deg: target.ra_deg,
+              dec_deg: target.dec_deg,
+              error: String(report.error)
+            });
+          }
+          continue;
+        }
 
-      if (resultRows.length === 0 && typeof report.error === "string") {
-        for (const target of group.targets) {
+        if (typeof report.error === "string") {
+          groupHasError = true;
+        }
+
+        for (const result of resultRows) {
+          records.push(toCutoutRecord(group, result, resolvedSourceUri));
+        }
+      } catch (error) {
+        groupHasError = true;
+        const message = error instanceof Error ? error.message : String(error);
+        for (const target of batchTargets) {
           records.push({
             status: "error",
             telescope: group.telescope,
             band: group.band,
             source_uri: group.source_uri,
-            resolved_source_uri: resolvedSourceUri,
             row_index: target.row_index,
             obj_id: target.obj_id,
             ra_deg: target.ra_deg,
             dec_deg: target.dec_deg,
-            error: String(report.error)
+            error: message
           });
         }
-        continue;
       }
+    }
 
-      for (const result of resultRows) {
-        records.push(toCutoutRecord(group, result, resolvedSourceUri));
-      }
-    } catch (error) {
+    if (groupHasError) {
       groupsFailed += 1;
-      const message = error instanceof Error ? error.message : String(error);
-      for (const target of group.targets) {
-        records.push({
-          status: "error",
-          telescope: group.telescope,
-          band: group.band,
-          source_uri: group.source_uri,
-          row_index: target.row_index,
-          obj_id: target.obj_id,
-          ra_deg: target.ra_deg,
-          dec_deg: target.dec_deg,
-          error: message
-        });
-      }
+    } else {
+      groupsSucceeded += 1;
     }
   }
 

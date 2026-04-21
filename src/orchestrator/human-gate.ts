@@ -87,9 +87,18 @@ function normalizeSelectionConditionId(value: unknown): SelectionConditionId | u
   return undefined;
 }
 
-function parseSelectionPlan(response: unknown): SelectionPlan | undefined {
+const REQUIRED_PARAM_KEYS: Record<SelectionConditionId, string[]> = {
+  galaxy_fraction: ["total_samples", "galaxy_fraction"],
+  bright_maskbits_filter: ["mode", "threshold"],
+  faint_mag_limit: ["mag_max"],
+  small_dim_galaxy_filter: ["seg_area_min", "galaxy_mag_max"],
+  oversized_galaxy_filter: ["stamp_size_px"],
+  uniform_mag_sampling: ["bins", "per_bin_per_class"]
+};
+
+function parseSelectionPlan(response: unknown): { plan?: SelectionPlan; error?: string } {
   if (typeof response !== "object" || response === null) {
-    return undefined;
+    return { error: "selection response must be JSON object" };
   }
 
   const record = response as Record<string, unknown>;
@@ -137,7 +146,7 @@ function parseSelectionPlan(response: unknown): SelectionPlan | undefined {
   }
 
   if (out.length === 0) {
-    return undefined;
+    return { error: "no valid selection conditions provided" };
   }
 
   const unique: SelectionConditionConfig[] = [];
@@ -178,7 +187,17 @@ function parseSelectionPlan(response: unknown): SelectionPlan | undefined {
     });
   }
 
-  return { conditions: unique };
+  for (const cond of unique) {
+    const params = (cond.params ?? {}) as Record<string, unknown>;
+    const requiredKeys = REQUIRED_PARAM_KEYS[cond.id] ?? [];
+    for (const key of requiredKeys) {
+      if (!(key in params)) {
+        return { error: `missing required params for ${cond.id}: ${requiredKeys.join(", ")}` };
+      }
+    }
+  }
+
+  return { plan: { conditions: unique } };
 }
 
 export async function resolveSelectionPlan(
@@ -293,14 +312,18 @@ export async function resolveSelectionPlan(
   }
 
   const hasResponseFile = fs.existsSync(responsePath);
-  const parsed = hasResponseFile
-    ? parseSelectionPlan(JSON.parse(fs.readFileSync(responsePath, "utf8")))
-    : undefined;
+  let parsedPlan: SelectionPlan | undefined;
+  let parsedError: string | undefined;
+  if (hasResponseFile) {
+    const parsed = parseSelectionPlan(JSON.parse(fs.readFileSync(responsePath, "utf8")));
+    parsedPlan = parsed.plan;
+    parsedError = parsed.error;
+  }
 
-  if (selectionConfirmed && parsed) {
+  if (selectionConfirmed && parsedPlan) {
     return {
       mode: "selected",
-      plan: parsed,
+      plan: parsedPlan,
       requestFile: requestPath,
       responseFile: responsePath,
       confirmationReceived: true,
@@ -310,7 +333,9 @@ export async function resolveSelectionPlan(
 
   const reason = !selectionConfirmed
     ? "Web mode requires explicit popup confirmation before applying selection plan."
-    : "Web mode requires valid selection_plan_response.json before applying selection plan.";
+    : (parsedError
+      ? `Web mode requires valid selection params: ${parsedError}`
+      : "Web mode requires valid selection_plan_response.json before applying selection plan.");
 
   return {
     mode: "default",
@@ -318,7 +343,7 @@ export async function resolveSelectionPlan(
     requestFile: requestPath,
     responseFile: responsePath,
     confirmationReceived: selectionConfirmed,
-    responsePresent: Boolean(parsed),
+    responsePresent: Boolean(parsedPlan),
     reason
   };
 }
