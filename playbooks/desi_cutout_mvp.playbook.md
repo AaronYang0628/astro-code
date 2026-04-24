@@ -64,6 +64,12 @@ steps:
     agent: reporter-agent
     action: export_selection_result
     depends_on: [selection-plan]
+
+  - id: cutout-execute
+    type: mcp_call
+    agent: orchestrator-agent
+    action: execute_grouped_cutout
+    depends_on: [filtered-export]
 ---
 
 # DESI Single-Catalog Cutout Playbook (Scaffold)

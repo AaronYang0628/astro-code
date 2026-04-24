@@ -1,5 +1,5 @@
 import type { Coord, InputSpec } from "./types.js";
-import { extractCoordFromS3Mcp } from "./mcp.js";
+import { extractCoordFromDesiS3Input, extractCoordFromS3Mcp } from "./mcp.js";
 
 function parseNumber(value: string): number {
   const n = Number(value.trim());
@@ -28,12 +28,27 @@ export function parseRaDecText(value: string): Coord {
   return { ra_deg: ra, dec_deg: dec, source: "radec_text" };
 }
 
-export async function extractCoord(input: InputSpec, _pythonBin: string): Promise<Coord> {
+export async function extractCoord(
+  input: InputSpec,
+  pythonBin: string,
+  options?: {
+    workflow?: string;
+    topK?: number;
+    desiCatalog?: "desi-dr10-tractor" | "desi-dr9-tractor";
+  }
+): Promise<Coord> {
   if (input.type === "radec_text") {
     return parseRaDecText(input.value);
   }
 
   if (input.type === "s3_uri") {
+    const workflow = (options?.workflow ?? "").trim().toLowerCase();
+    if (workflow.includes("desi_cutout")) {
+      return extractCoordFromDesiS3Input(input.value, pythonBin, {
+        topK: options?.topK,
+        catalog: options?.desiCatalog
+      });
+    }
     return extractCoordFromS3Mcp(input.value);
   }
 

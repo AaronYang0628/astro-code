@@ -46,6 +46,7 @@ export interface CutoutRequest {
   output_prefix?: string;
   size_deg?: number;
   desi_bands?: CutoutDesiBand[];
+  target_batch_size?: number;
 }
 
 export interface RunRequest {
@@ -121,6 +122,7 @@ export interface Coord {
   ra_deg: number;
   dec_deg: number;
   source: string;
+  brickname?: string;
   ra_min?: number;
   ra_max?: number;
   dec_min?: number;

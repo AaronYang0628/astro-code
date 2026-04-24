@@ -3,17 +3,18 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { loadConfig } from "./config.js";
 import { extractCoord } from "./coord.js";
-import { buildCandidatePoolFromEuclidOnly, crossmatchCatalogs } from "./crossmatch.js";
+import { buildCandidatePoolFromDesiOnly, buildCandidatePoolFromEuclidOnly, crossmatchCatalogs } from "./crossmatch.js";
 import { resolveHumanFilter, resolveSelectionPlan } from "./human-gate.js";
 import { createRunDir, ensureDir, writeCsv, writeJson, writeReport } from "./io.js";
 import { setMcpCallLogger } from "./mcp-client.js";
-import { queryCatalogMcp, queryDesiMcpWithDetails, queryEuclidRowsByTileOnly, resolveEuclidMerVisFitsPathByTile, resolveTileIdForS3Input } from "./mcp.js";
+import { queryCatalogMcp, queryDesiMcpWithDetails, queryEuclidRowsByTileOnly, resolveDesiCatalogFromS3Path, resolveEuclidMerVisFitsPathByTile, resolveTileIdForS3Input } from "./mcp.js";
 import type { DesiQueryDetails } from "./mcp.js";
 import { loadPlaybook } from "./playbook.js";
 import { applySelectionPlan } from "./selection.js";
 import { executeGroupedCutoutViaMcp } from "./cutout.js";
 import { resolveCutoutEnabled, shouldExecuteCutout } from "./cutout-gate.js";
 import type { CatalogRecord, Coord, CrossmatchRecord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
+import { resolveLocalEuclidTileId } from "./euclid-tiles.js";
 
 function toBrickPrefix(brickname: string): string {
   return brickname.slice(0, 3);
@@ -21,7 +22,7 @@ function toBrickPrefix(brickname: string): string {
 
 const EUCLID_MER_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/euclid/aws-mirrors/q1/MER";
 const DESI_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south";
-const DESI_TRACTOR_S3_BASE = "s3://data-and-computing/projects/projects/CSST/shared-data/desi/dr10/south";
+const DESI_TRACTOR_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south";
 const OUTPUT_COLUMNS = [
   "obj_id",
   "tile_index",
@@ -142,19 +143,32 @@ function normalizeEuclidFitsPath(
 }
 
 function normalizeDesiFitsPath(value: string | null | undefined, brickname: string | null, kind: "tractor_i" | "tractor" | "g" | "r" | "i" | "z"): string | null {
+  const derived = brickname
+    ? (kind === "tractor_i"
+      ? buildDesiTractorIPath(brickname)
+      : (kind === "tractor"
+        ? buildDesiTractorPath(brickname)
+        : buildDesiImagePath(brickname, kind)))
+    : null;
+
   if (isPathLike(value)) {
-    return value as string;
+    if (!brickname || !derived) {
+      return value as string;
+    }
+    const normalized = (value as string).toLowerCase();
+    const p = toBrickPrefix(brickname).toLowerCase();
+    const b = brickname.toLowerCase();
+    const valid = kind === "tractor_i"
+      ? normalized.includes(`/tractor-i/${p}/tractor-i-${b}.fits`)
+      : kind === "tractor"
+        ? normalized.includes(`/tractor/${p}/tractor-${b}.fits`)
+        : (normalized.includes(`/coadd/${p}/${b}/`) && normalized.includes(`-image-${kind}.fits`));
+    return valid ? (value as string) : derived;
   }
-  if (!brickname) {
+  if (!derived) {
     return null;
   }
-  if (kind === "tractor_i") {
-    return buildDesiTractorIPath(brickname);
-  }
-  if (kind === "tractor") {
-    return buildDesiTractorPath(brickname);
-  }
-  return buildDesiImagePath(brickname, kind);
+  return derived;
 }
 
 function normalizeCandidatePaths(rows: CrossmatchRecord[]): CrossmatchRecord[] {
@@ -320,6 +334,38 @@ async function hydrateEuclidFitsPaths(rows: CrossmatchRecord[]): Promise<Crossma
       ...row,
       euclid_fits_path: resolved.path,
       euclid_vis_path_pattern: resolved.path,
+      euclid_path_source: pathSource,
+      missing_reasons: missingReasons
+    };
+  });
+}
+
+async function hydrateEuclidFitsPathsFromCoord(rows: CrossmatchRecord[], coord: Coord): Promise<CrossmatchRecord[]> {
+  const tileId = resolveLocalEuclidTileId(coord.ra_deg, coord.dec_deg);
+  if (!tileId) {
+    // Keep Euclid path empty when no local tile mapping covers this sky region.
+    return rows;
+  }
+
+  const resolvedPath = await resolveEuclidMerVisFitsPathByTile(tileId);
+  if (!resolvedPath) {
+    return rows;
+  }
+
+  const pathSource = resolvedPath.source === "catalog_match"
+    ? "euclid-catalog.list_catalogs:BGSUB-MOSAIC-VIS"
+    : "euclid-catalog.list_catalogs:fallback_pattern";
+
+  return rows.map((row) => {
+    const missingReasons = resolvedPath.source === "fallback_pattern"
+      ? appendMissingReason(row.missing_reasons, "euclid_fits_path_generated_pattern")
+      : row.missing_reasons;
+    return {
+      ...row,
+      tile_id: row.tile_id ?? tileId,
+      tile_index: row.tile_index ?? tileId,
+      euclid_fits_path: resolvedPath.path,
+      euclid_vis_path_pattern: resolvedPath.path,
       euclid_path_source: pathSource,
       missing_reasons: missingReasons
     };
@@ -590,9 +636,19 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const executionMode = request.execution_mode ?? (interaction === "web" ? "interactive_debug" : "pipeline_strict");
   const workflow = (request.workflow ?? "").toString().trim().toLowerCase();
   const isEuclidSingleWorkflow = options.playbookPath.includes("euclid_cutout");
+  const isDesiSingleWorkflow = options.playbookPath.includes("desi_cutout");
+  const desiCatalog = isDesiSingleWorkflow && request.input.type === "s3_uri"
+    ? resolveDesiCatalogFromS3Path(request.input.value)
+    : "desi-dr10-tractor";
+  const s3InputBrickname = request.input.type === "s3_uri"
+    ? ((request.input.value.match(/tractor-i-([0-9]{4}[pm][0-9]{3})\.fits(?:\.fz)?$/i)?.[1]
+      ?? request.input.value.match(/tractor-([0-9]{4}[pm][0-9]{3})\.fits(?:\.fz)?$/i)?.[1]
+      ?? null) as string | null)
+    : null;
   const radiusArcsec = request.radiusArcsec ?? playbook.defaults?.radius_arcsec ?? config.defaults.default_radius_arcsec;
   const topK = request.topK ?? playbook.defaults?.top_k ?? config.defaults.top_k;
   const previewRows = request.previewRows ?? playbook.defaults?.preview_rows ?? config.defaults.preview_rows;
+  const effectivePreviewRows = Math.max(10, previewRows);
   const maxResultRows = config.defaults.max_result_rows;
 
   const runStatus: RunStatus = {
@@ -611,7 +667,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       interaction_backend: config.runtime.interaction_backend,
       radius_arcsec: radiusArcsec,
       top_k: topK,
-      preview_rows: previewRows
+      preview_rows: effectivePreviewRows
     }
   };
   writeRunStatus(statusJson, runStatus);
@@ -644,7 +700,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     interaction_backend: config.runtime.interaction_backend,
     radius_arcsec: radiusArcsec,
     top_k: topK,
-    preview_rows: previewRows
+    preview_rows: effectivePreviewRows
   };
   writeRunStatus(statusJson, runStatus);
 
@@ -654,7 +710,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   progress?.("Execution mode: ts_orchestrator (single pipeline for web/cli)");
   progress?.(`Pipeline mode: ${executionMode}`);
-  progress?.(`Task: input=${effectiveRequest.input.type}, interaction=${interaction}, backend=${config.runtime.interaction_backend}, radiusArcsec=${radiusArcsec}, topK=${topK}, previewRows=${previewRows}`);
+  progress?.(`Task: input=${effectiveRequest.input.type}, interaction=${interaction}, backend=${config.runtime.interaction_backend}, radiusArcsec=${radiusArcsec}, topK=${topK}, previewRows=${effectivePreviewRows}`);
   if (workflow.length > 0) {
     progress?.(`Workflow: ${workflow}`);
   }
@@ -663,7 +719,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     step("selection-resume", "resume existing run and continue from confirmed selection", "load candidate pool from existing artifacts and apply selection plan directly");
     const candidatePoolInternalJson = path.join(runDir, "candidate_pool.internal.json");
     const candidatePoolCsv = path.join(runDir, "candidate_pool.csv");
-    const previewRowsWritten = Math.min(previewRows, 10);
+    const previewRowsWritten = Math.min(effectivePreviewRows, 10);
     const previewCsv = path.join(runDir, `preview_${previewRowsWritten}.csv`);
     const selectionFinalCsv = path.join(runDir, "selection_final.csv");
     const selectionReportJson = path.join(runDir, "selection_report.json");
@@ -674,7 +730,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     if (!fs.existsSync(candidatePoolInternalJson)) {
       throw new Error(`resume requires existing candidate_pool.internal.json: ${candidatePoolInternalJson}`);
     }
-    const crossmatchTruncated = JSON.parse(fs.readFileSync(candidatePoolInternalJson, "utf8")) as CrossmatchRecord[];
+    const crossmatchLoaded = JSON.parse(fs.readFileSync(candidatePoolInternalJson, "utf8")) as CrossmatchRecord[];
+    const crossmatchTruncated = normalizeCandidatePaths(crossmatchLoaded);
+    writeJson(candidatePoolInternalJson, crossmatchTruncated);
+    writeCsv(candidatePoolCsv, crossmatchTruncated as unknown as Record<string, unknown>[], [...OUTPUT_COLUMNS]);
     const previewSample = crossmatchTruncated.slice(0, 10) as unknown as Record<string, unknown>[];
     const availableFilterFields = [...OUTPUT_COLUMNS];
 
@@ -791,7 +850,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     });
 
     const filtered = selectionResult.selected_rows;
-    const cutoutEnabled = resolveCutoutEnabled(effectiveRequest.cutout?.enabled, isEuclidSingleWorkflow);
+    const cutoutEnabled = resolveCutoutEnabled(effectiveRequest.cutout?.enabled, isEuclidSingleWorkflow || isDesiSingleWorkflow);
     const cutoutShouldExecute = shouldExecuteCutout(cutoutEnabled, filtered.length);
     let cutoutGroupsTotal = 0;
     let cutoutSuccessRows = 0;
@@ -811,6 +870,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
         ? Number(effectiveRequest.cutout?.size_deg)
         : 0.008;
       const cutoutBands = normalizeCutoutBands(effectiveRequest.cutout?.desi_bands);
+      const cutoutTargetBatchSize = Number.isFinite(Number(effectiveRequest.cutout?.target_batch_size))
+        ? Math.max(1, Math.floor(Number(effectiveRequest.cutout?.target_batch_size)))
+        : 1;
       const cutoutSummary = await executeGroupedCutoutViaMcp({
         runId,
         rows: filtered,
@@ -818,7 +880,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
         outputPrefix: cutoutOutputPrefix,
         sizeDeg: cutoutSizeDeg,
         desiBands: cutoutBands,
-        targetBatchSize: 1,
+        targetBatchSize: cutoutTargetBatchSize,
         progress
       });
       cutoutGroupsTotal = cutoutSummary.groups_total;
@@ -937,7 +999,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   }
   stepResult(`input source accepted: ${effectiveRequest.input.type}`);
 
-  step("coord-extractor", "extract query coordinate by input source", "resolve tile/rows first for euclid single s3 flow; otherwise resolve RA/DEC by source");
+  step("coord-extractor", "extract query coordinate by input source", "for euclid s3 use tile-first route; for desi s3 use DESI ES/path route with python fallback; otherwise parse RA/DEC by source");
   runStatus.current_phase = "extract_coord";
   runStatus.current_step = "extract_coordinate";
   writeRunStatus(statusJson, runStatus);
@@ -974,7 +1036,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       };
       stepResult(`coordinate extraction success: tile_id=${tileId}, source=${coord.source}, RA=${coord.ra_deg}, DEC=${coord.dec_deg}, euclid_rows=${euclidRowsSeed.length}`);
     } else {
-      coord = await extractCoord(effectiveRequest.input, config.runtime.python_bin);
+      coord = await extractCoord(effectiveRequest.input, config.runtime.python_bin, {
+        workflow,
+        topK,
+        desiCatalog
+      });
       stepResult(`coordinate extraction success: source=${coord.source}, RA=${coord.ra_deg}, DEC=${coord.dec_deg}`);
       if (extractedTileId) {
         progress?.(`Coord note: extracted tile_id=${extractedTileId} from s3 path; MCP S3 tools are still attempted first for direct coordinate ranges before tile/index fallback.`);
@@ -992,7 +1058,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   runStatus.current_step = "query_euclid";
   writeRunStatus(statusJson, runStatus);
   let euclidRows: CatalogRecord[];
-  if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri" && euclidRowsSeed) {
+  if (isDesiSingleWorkflow) {
+    euclidRows = [];
+    progress?.("MCP call (euclid): skipped by desi single workflow");
+  } else if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri" && euclidRowsSeed) {
     euclidRows = euclidRowsSeed;
     progress?.(`MCP call (euclid): skipped additional query; using input-router rows=${euclidRows.length}`);
   } else {
@@ -1070,14 +1139,17 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     });
     progress?.("MCP call (desi): skipped by euclid single workflow");
   } else {
-    progress?.("MCP call (desi): server=astro_k3s_mcp, tool=es_query, mode=search, catalog=desi-dr10-tractor");
-    desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: 1 });
+    progress?.(`MCP call (desi): server=astro_k3s_mcp, tool=es_query, mode=search, catalog=${desiCatalog}`);
+    if (isDesiSingleWorkflow && s3InputBrickname) {
+      progress?.(`DESI query constraint: brickname=${s3InputBrickname.toLowerCase()}`);
+    }
+    desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: 1, catalog: desiCatalog });
     desiRows = desiDetails.rows;
     desiRowsInitial = desiRows.length;
     desiHitsTotalInitial = desiDetails.hitsTotal;
 
     writeJson(desiSearchQueryJson, {
-      catalog: "desi-dr10-tractor",
+      catalog: desiCatalog,
       mode: "search",
       window: desiDetails.queryWindow,
       query_body: desiDetails.queryBody,
@@ -1085,7 +1157,8 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       query_center: {
         ra_deg: coord.ra_deg,
         dec_deg: coord.dec_deg
-      }
+      },
+      brickname: coord.brickname ?? s3InputBrickname ?? null
     });
     writeJson(desiSearchInitialRawJson, desiDetails.rawPayload);
     writeJson(desiSearchSampleRawJson, desiDetails.samplePayload);
@@ -1099,7 +1172,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
     if (desiRows.length === 0 && Number.isFinite(retryScale) && retryScale > 1) {
       progress?.(`DESI retry: enabled, scale=${retryScale}`);
-      desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: retryScale });
+      desiDetails = await queryDesiMcpWithDetails(coord, topK, { windowScale: retryScale, catalog: desiCatalog });
       desiRows = desiDetails.rows;
       desiRetryRawJson = path.join(mcpDir, "desi_search_retry.raw.json");
       desiRetrySampleRawJson = path.join(mcpDir, "desi_search_retry_sample.raw.json");
@@ -1120,7 +1193,15 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   };
   writeRunStatus(statusJson, runStatus);
 
-  step("crossmatch", isEuclidSingleWorkflow ? "build Euclid single-catalog candidate pool" : "build Euclid×DESI candidate pool", "crossmatch and enrich with brick/path metadata");
+  step(
+    "crossmatch",
+    isEuclidSingleWorkflow
+      ? "build Euclid single-catalog candidate pool"
+      : isDesiSingleWorkflow
+        ? "build DESI single-catalog candidate pool"
+        : "build Euclid×DESI candidate pool",
+    "crossmatch and enrich with brick/path metadata"
+  );
   runStatus.current_phase = "crossmatch";
   runStatus.current_step = "crossmatch_catalogs";
   writeRunStatus(statusJson, runStatus);
@@ -1138,6 +1219,15 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       radiusArcsec,
       { byObjectId: brickResolve.byObjectId }
     )
+    : isDesiSingleWorkflow
+      ? buildCandidatePoolFromDesiOnly(
+        desiRows,
+        {
+          ra_deg: coord.ra_deg,
+          dec_deg: coord.dec_deg
+        },
+        radiusArcsec
+      )
     : crossmatchCatalogs(euclidRows, desiRows, radiusArcsec, {
       ra_deg: coord.ra_deg,
       dec_deg: coord.dec_deg
@@ -1198,7 +1288,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const desiQueryCsv = path.join(runDir, "desi_query.csv");
   const candidatePoolCsv = path.join(runDir, "candidate_pool.csv");
   const candidatePoolInternalJson = path.join(runDir, "candidate_pool.internal.json");
-  const previewRowsWritten = Math.min(previewRows, 10);
+  const previewRowsWritten = Math.min(effectivePreviewRows, 10);
   const previewCsv = path.join(runDir, `preview_${previewRowsWritten}.csv`);
 
   const t1RowsWithMissing = crossmatched.filter((row) => row.missing_reasons !== "none").length;
@@ -1275,13 +1365,16 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   let crossmatchTruncated = normalizeCandidatePaths(crossmatched.slice(0, maxResultRows));
   if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri") {
     crossmatchTruncated = pinEuclidFitsPathToInput(crossmatchTruncated, effectiveRequest.input.value);
-  } else {
+  } else if (isDesiSingleWorkflow) {
+    crossmatchTruncated = await hydrateEuclidFitsPathsFromCoord(crossmatchTruncated, coord);
+  } else if (!isDesiSingleWorkflow) {
     crossmatchTruncated = await hydrateEuclidFitsPaths(crossmatchTruncated);
   }
   const preview = crossmatchTruncated.slice(0, previewRowsWritten);
   const previewSample = preview.slice(0, 10) as unknown as Record<string, unknown>[];
   const outputColumns = OUTPUT_COLUMNS;
   const availableFilterFields = [...outputColumns];
+  progress?.(`Preview fields: ${availableFilterFields.join(", ")}`);
 
   writeCsv(euclidQueryCsv, euclidRows as unknown as Record<string, unknown>[]);
   writeCsv(desiQueryCsv, desiRows as unknown as Record<string, unknown>[]);
@@ -1289,10 +1382,13 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   writeJson(candidatePoolInternalJson, crossmatchTruncated);
   step("preview-export", "export candidate pool preview for user inspection", "write preview CSV for interactive selection");
   writeCsv(previewCsv, preview as unknown as Record<string, unknown>[], [...outputColumns]);
+  progress?.(`Preview CSV written: ${previewCsv}`);
   const previewMarkdown = toMarkdownTable(previewSample, [...outputColumns]);
   if (previewMarkdown) {
     progress?.("Preview sample (markdown table, top 10):");
     progress?.(previewMarkdown);
+  } else {
+    progress?.("Preview sample unavailable (no rows or no displayable fields).");
   }
 
   stepResult(`candidate pool rows: ${crossmatchTruncated.length}; preview rows: ${preview.length}`);
@@ -1528,7 +1624,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
 
   const filtered = selectionResult.selected_rows;
 
-  const cutoutEnabled = resolveCutoutEnabled(effectiveRequest.cutout?.enabled, isEuclidSingleWorkflow);
+  const cutoutEnabled = resolveCutoutEnabled(effectiveRequest.cutout?.enabled, isEuclidSingleWorkflow || isDesiSingleWorkflow);
   const cutoutShouldExecute = shouldExecuteCutout(cutoutEnabled, filtered.length);
   let cutoutGroupsTotal = 0;
   let cutoutSuccessRows = 0;
@@ -1548,6 +1644,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       ? Number(effectiveRequest.cutout?.size_deg)
       : 0.008;
     const cutoutBands = normalizeCutoutBands(effectiveRequest.cutout?.desi_bands);
+    const cutoutTargetBatchSize = Number.isFinite(Number(effectiveRequest.cutout?.target_batch_size))
+      ? Math.max(1, Math.floor(Number(effectiveRequest.cutout?.target_batch_size)))
+      : 1;
 
     const cutoutSummary = await executeGroupedCutoutViaMcp({
       runId,
@@ -1556,7 +1655,7 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       outputPrefix: cutoutOutputPrefix,
       sizeDeg: cutoutSizeDeg,
       desiBands: cutoutBands,
-      targetBatchSize: 1,
+      targetBatchSize: cutoutTargetBatchSize,
       progress
     });
 

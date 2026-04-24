@@ -49,28 +49,4 @@ spec:
       storage: {{ .Values.persistence.data.size | default .Values.persistence.size }}
 ---
 {{- end }}
-{{- if .Values.persistence.workspace.enabled }}
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ printf "%s-workspace" (include "astro-code.fullname" .) }}
-  labels:
-    {{- include "astro-code.labels" . | nindent 4 }}
-{{- if .Values.persistence.labels }}
-    {{- toYaml .Values.persistence.labels | nindent 4 }}
-{{- end }}
-{{- if .Values.persistence.annotations }}
-  annotations:
-    {{- toYaml .Values.persistence.annotations | nindent 4 }}
-{{- end }}
-spec:
-  accessModes:
-    - {{ .Values.persistence.accessMode }}
-{{- if .Values.persistence.storageClass }}
-  storageClassName: {{ .Values.persistence.storageClass }}
-{{- end }}
-  resources:
-    requests:
-      storage: {{ .Values.persistence.workspace.size | default .Values.persistence.size }}
-{{- end }}
 {{- end }}

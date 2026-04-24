@@ -7,6 +7,7 @@
     "run": "tsx src/orchestrator/index.ts",
     "run:mvp": "tsx src/orchestrator/index.ts --request examples/request.radec.json --playbook playbooks/euclid_desi_mvp.playbook.md --config pipeline.config.yaml",
     "test": "tsx src/orchestrator/__tests__/gates.test.ts",
+    "check:euclid-tile": "tsx scripts/check-euclid-tile.ts",
     "deploy:k8s": "bash ops/oneclick-deploy.sh k8s",
     "deploy:dev": "bash ops/oneclick-deploy.sh dev"
   },

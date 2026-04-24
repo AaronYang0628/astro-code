@@ -41,10 +41,8 @@ spec:
 {{- end }}
 {{- $isExternal := eq .Values.opencodeConfig.mode "external" }}
 {{- $needsSeedInit := and .Values.initSeed.enabled (eq .Values.opencodeConfig.mode "seed") .Values.persistence.enabled .Values.persistence.config.enabled }}
-{{- $needsExternalWorkspaceInit := and $isExternal .Values.persistence.workspace.enabled }}
-{{- if or $needsSeedInit $needsExternalWorkspaceInit }}
-      initContainers:
 {{- if $needsSeedInit }}
+      initContainers:
       - name: init-seed
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -55,50 +53,12 @@ spec:
             mkdir -p /mnt/config
             cp -f /opt/astro-code-seed/config/opencode.json /mnt/config/opencode.json
             cp -f /opt/astro-code-seed/config/octto.json /mnt/config/octto.json
-{{- if .Values.persistence.workspace.enabled }}
-            if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
-              mkdir -p /mnt/workspace
-              cp -a /opt/astro-code-seed/workspace/. /mnt/workspace/
-            fi
-            mkdir -p /mnt/workspace/runs
-            mkdir -p /mnt/workspace/.opencode
-            cp -f /opt/astro-code-seed/config/opencode.json /mnt/workspace/.opencode/opencode.json
-            cp -f /opt/astro-code-seed/config/octto.json /mnt/workspace/.opencode/octto.json
-            if [ -d /opt/astro-code-seed/workspace/.opencode ]; then
-              cp -a /opt/astro-code-seed/workspace/.opencode/. /mnt/workspace/.opencode/
-            fi
-{{- end }}
         securityContext:
           {{- toYaml .Values.securityContext | nindent 10 }}
         volumeMounts:
 {{- if and .Values.persistence.config.enabled (eq .Values.opencodeConfig.mode "seed") }}
         - name: config
           mountPath: /mnt/config
-{{- end }}
-{{- if .Values.persistence.workspace.enabled }}
-        - name: workspace
-          mountPath: /mnt/workspace
-{{- end }}
-{{- end }}
-{{- if $needsExternalWorkspaceInit }}
-      - name: init-workspace-opencode-dir
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-        command: ["/bin/sh", "-c"]
-        args:
-          - |
-            set -e
-            mkdir -p /mnt/workspace
-            if [ -z "$(ls -A /mnt/workspace 2>/dev/null)" ]; then
-              cp -a /opt/astro-code-seed/workspace/. /mnt/workspace/
-            fi
-            mkdir -p /mnt/workspace/.opencode
-            mkdir -p /mnt/workspace/runs
-        securityContext:
-          {{- toYaml .Values.securityContext | nindent 10 }}
-        volumeMounts:
-        - name: workspace
-          mountPath: /mnt/workspace
 {{- end }}
 {{- end }}
       containers:
@@ -191,10 +151,8 @@ spec:
 {{- if .Values.persistence.data.enabled }}
         - name: data
           mountPath: /home/opencode/.local/share/opencode
-{{- end }}
-{{- if .Values.persistence.workspace.enabled }}
-        - name: workspace
-          mountPath: /home/opencode/workspace
+        - name: data
+          mountPath: /home/opencode/workspace/runs
 {{- end }}
 {{- if .Values.extraVolumeMounts }}
 {{- toYaml .Values.extraVolumeMounts | nindent 8 }}
@@ -205,12 +163,10 @@ spec:
           mountPath: /home/opencode/.config/opencode/opencode.json
           subPath: opencode.json
           readOnly: true
-{{- if .Values.persistence.workspace.enabled }}
         - name: opencode-external-config
           mountPath: /home/opencode/workspace/.opencode/opencode.json
           subPath: opencode.json
           readOnly: true
-{{- end }}
 {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 12 }}
@@ -227,11 +183,6 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: {{ .Values.persistence.data.existingClaim | default (printf "%s-data" (include "astro-code.fullname" .)) }}
-{{- end }}
-{{- if .Values.persistence.workspace.enabled }}
-      - name: workspace
-        persistentVolumeClaim:
-          claimName: {{ .Values.persistence.workspace.existingClaim | default (printf "%s-workspace" (include "astro-code.fullname" .)) }}
 {{- end }}
 {{- if and .Values.opencodeConfig.secret.enabled (eq .Values.opencodeConfig.mode "secret") }}
       - name: opencode-config-secret

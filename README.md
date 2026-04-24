@@ -89,6 +89,7 @@ Detailed guides:
 - If DESI returns 0 rows on first query, pipeline auto-retries with wider window (`DESI_RETRY_SCALE`, default `20`).
 - Web mode requires explicit six-condition selection before writing `selection_final.csv` (status becomes `waiting_selection` until selected).
 - When crossmatch has rows, field/value filtering is collected via configured backend (`native|octto|hybrid`).
+- Euclid tile lookup can run from local registry file `config/euclid_tiles_q1.json` (override with `EUCLID_TILE_REGISTRY_PATH`).
 - Local cutout worker (no MCP server required): `py/workers/cutout_stamp_worker.py`.
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
@@ -188,3 +189,13 @@ Non-interactive sanity check:
 ```bash
 opencode run "只回复: ok" --agent orchestrator-agent --model openai/gpt-5.3-codex
 ```
+
+## Local Euclid tile check
+
+Quickly test local `RA/DEC -> tile_id` resolution from the registry:
+
+```bash
+npm run check:euclid-tile -- --ra 56.8 --dec -50.9
+```
+
+The command prints registry path, tile count, input coordinates, and resolved `tile_id` (empty means no local Euclid coverage for the point).

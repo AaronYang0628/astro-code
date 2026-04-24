@@ -98,6 +98,44 @@ function normalizeBands(bands: DesiBand[]): DesiBand[] {
   return out.length > 0 ? out : ["g", "r", "i", "z"];
 }
 
+function toBrickPrefix(brickname: string): string {
+  return brickname.slice(0, 3);
+}
+
+function buildCanonicalDesiImagePath(brickname: string, band: DesiBand): string {
+  const base = "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south";
+  const p = toBrickPrefix(brickname);
+  return `${base}/coadd/${p}/${brickname}/legacysurvey-${brickname}-image-${band}.fits.fz`;
+}
+
+function isCanonicalDesiImagePath(value: string, brickname: string, band: DesiBand): boolean {
+  const normalized = value.toLowerCase();
+  const p = toBrickPrefix(brickname).toLowerCase();
+  const b = brickname.toLowerCase();
+  return normalized.includes(`/coadd/${p}/${b}/`) && normalized.includes(`-image-${band}.fits`);
+}
+
+function pickDesiSourceUri(row: CrossmatchRecord, band: DesiBand): string | null {
+  const raw = band === "g"
+    ? row.desi_image_g_path
+    : band === "r"
+      ? row.desi_image_r_path
+      : band === "i"
+        ? row.desi_image_i_path
+        : row.desi_image_z_path;
+
+  if (typeof row.brickname === "string" && row.brickname.trim().length > 0) {
+    const brick = row.brickname.trim();
+    const canonical = buildCanonicalDesiImagePath(brick, band);
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      return canonical;
+    }
+    return isCanonicalDesiImagePath(raw, brick, band) ? raw : canonical;
+  }
+
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+}
+
 function buildCutoutGroups(rows: CrossmatchRecord[], desiBands: DesiBand[]): CutoutGroup[] {
   const groups = new Map<string, CutoutGroup>();
 
@@ -145,15 +183,8 @@ function buildCutoutGroups(rows: CrossmatchRecord[], desiBands: DesiBand[]): Cut
     }
 
     for (const band of effectiveBands) {
-      const sourceUri = band === "g"
-        ? row.desi_image_g_path
-        : band === "r"
-          ? row.desi_image_r_path
-          : band === "i"
-            ? row.desi_image_i_path
-            : row.desi_image_z_path;
-
-      if (typeof sourceUri === "string" && sourceUri.trim().length > 0) {
+      const sourceUri = pickDesiSourceUri(row, band);
+      if (sourceUri) {
         addTarget("desi", band, sourceUri, target);
       }
     }

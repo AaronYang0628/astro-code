@@ -40,9 +40,6 @@ persistence:
   data:
     enabled: true
     size: 1Gi
-  workspace:
-    enabled: true
-    size: 5Gi
 
 opencode:
   serverPassword: ""

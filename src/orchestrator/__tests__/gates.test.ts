@@ -25,9 +25,10 @@ test("web selection gate proceeds only with confirmation and response", () => {
   assert.equal(canProceed, true);
 });
 
-test("euclid_cutout workflow defaults cutout enabled", () => {
+test("single-catalog workflow defaults cutout enabled", () => {
   assert.equal(resolveCutoutEnabled(undefined, true), true);
   assert.equal(resolveCutoutEnabled(false, true), false);
+  assert.equal(resolveCutoutEnabled(undefined, false), false);
 });
 
 test("cutout executes only when selected rows > 0", () => {

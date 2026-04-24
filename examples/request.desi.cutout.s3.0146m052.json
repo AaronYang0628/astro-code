@@ -1,0 +1,11 @@
+{
+  "workflow": "desi_cutout",
+  "input": {
+    "type": "s3_uri",
+    "value": "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south/tractor-i/056/tractor-i-0146m052.fits"
+  },
+  "radiusArcsec": 1.0,
+  "topK": 100,
+  "previewRows": 100,
+  "interaction": "web"
+}

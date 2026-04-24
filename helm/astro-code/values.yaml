@@ -107,10 +107,6 @@ persistence:
     enabled: true
     existingClaim: ""
     size: 1Gi
-  workspace:
-    enabled: true
-    existingClaim: ""
-    size: 5Gi
 
 resources:
   limits:

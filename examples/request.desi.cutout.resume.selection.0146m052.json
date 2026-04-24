@@ -1,0 +1,28 @@
+{
+  "workflow": "desi_cutout",
+  "input": {
+    "type": "s3_uri",
+    "value": "s3://data-and-computing/projects/CSST/shared-data/desi/dr10/south/tractor-i/056/tractor-i-0146m052.fits"
+  },
+  "interaction": "web",
+  "resume_run_id": "run_20260424_desi_0146m052",
+  "selection": {
+    "conditions": [
+      {
+        "id": "desi_type_filter",
+        "params": {
+          "type": "REX"
+        }
+      }
+    ]
+  },
+  "selection_confirmed": true,
+  "cutout": {
+    "enabled": true,
+    "mcp_server": "fits-cutout",
+    "output_prefix": "s3://data-and-computing/projects/CSST/shared-data/astro/cutouts",
+    "size_deg": 0.008,
+    "desi_bands": ["g"],
+    "target_batch_size": 1
+  }
+}

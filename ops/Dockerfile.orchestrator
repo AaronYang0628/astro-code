@@ -1,4 +1,4 @@
-FROM ghcr.io/nimbleflux/opencode-docker:1.3.13
+FROM ghcr.io/nimbleflux/opencode-docker:1.14.20
 
 WORKDIR /home/opencode
 
@@ -11,6 +11,9 @@ COPY py/requirements.txt /tmp/requirements.txt
 RUN pip install --break-system-packages --no-cache-dir -r /tmp/requirements.txt
 
 COPY . /opt/astro-code-seed/workspace
+
+RUN rm -rf /home/opencode/workspace \
+    && cp -a /opt/astro-code-seed/workspace /home/opencode/workspace
 
 RUN cd /opt/astro-code-seed/workspace/.opencode && npm install
 

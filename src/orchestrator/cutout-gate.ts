@@ -1,8 +1,8 @@
 export function resolveCutoutEnabled(
   requestedEnabled: boolean | undefined,
-  isEuclidSingleWorkflow: boolean
+  isSingleCatalogWorkflow: boolean
 ): boolean {
-  return requestedEnabled ?? isEuclidSingleWorkflow;
+  return requestedEnabled ?? isSingleCatalogWorkflow;
 }
 
 export function shouldExecuteCutout(

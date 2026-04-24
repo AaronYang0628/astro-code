@@ -1,3 +1,5 @@
+import { execSync } from "node:child_process";
+import path from "node:path";
 import { callMcpTool } from "./mcp-client.js";
 import type { CatalogRecord, Coord } from "./types.js";
 
@@ -7,7 +9,10 @@ const EUCLID_MER_S3_BASE = "s3://data-and-computing/projects/CSST/shared-data/eu
 
 interface QueryOptions {
   windowScale?: number;
+  catalog?: DesiCatalogName;
 }
+
+type DesiCatalogName = "desi-dr10-tractor" | "desi-dr9-tractor";
 
 const tileResolveCache = new Map<string, { tile_id?: string; source: string }>();
 const euclidVisFitsPathCache = new Map<string, { path: string; source: "catalog_match" | "fallback_pattern" }>();
@@ -21,7 +26,7 @@ interface DesiQueryWindow {
 
 interface DesiOrigin {
   source_system: "astro_k3s_mcp";
-  catalog: "desi-dr10-tractor";
+  catalog: DesiCatalogName;
   backend_type: "mcp_es_index";
   storage_hint: "es-index" | "s3" | "local" | "unknown";
   source_path: string | null;
@@ -169,6 +174,240 @@ function normalizeS3Path(value: unknown): string | undefined {
   return undefined;
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function extractDesiBricknameFromPath(value: string): string | undefined {
+  const patterns = [
+    /tractor-i-([0-9]{4}[pm][0-9]{3})\.fits(?:\.fz)?$/i,
+    /tractor-([0-9]{4}[pm][0-9]{3})\.fits(?:\.fz)?$/i,
+    /legacysurvey-([0-9]{4}[pm][0-9]{3})-image-[griz]\.fits(?:\.fz)?$/i,
+    /(?:^|\/)([0-9]{4}[pm][0-9]{3})(?:\/|$)/i
+  ];
+  for (const pattern of patterns) {
+    const matched = value.match(pattern);
+    if (matched?.[1]) {
+      return matched[1].toLowerCase();
+    }
+  }
+  return undefined;
+}
+
+function deriveCoordFromDesiRows(rows: CatalogRecord[]): Coord | null {
+  let raMin = Number.POSITIVE_INFINITY;
+  let raMax = Number.NEGATIVE_INFINITY;
+  let decMin = Number.POSITIVE_INFINITY;
+  let decMax = Number.NEGATIVE_INFINITY;
+  let count = 0;
+
+  for (const row of rows) {
+    if (!Number.isFinite(row.ra_deg) || !Number.isFinite(row.dec_deg)) {
+      continue;
+    }
+    if (row.ra_deg < raMin) raMin = row.ra_deg;
+    if (row.ra_deg > raMax) raMax = row.ra_deg;
+    if (row.dec_deg < decMin) decMin = row.dec_deg;
+    if (row.dec_deg > decMax) decMax = row.dec_deg;
+    count += 1;
+  }
+
+  if (count === 0 || !Number.isFinite(raMin) || !Number.isFinite(raMax) || !Number.isFinite(decMin) || !Number.isFinite(decMax)) {
+    return null;
+  }
+
+  return {
+    ra_deg: (raMin + raMax) / 2,
+    dec_deg: (decMin + decMax) / 2,
+    ra_min: raMin,
+    ra_max: raMax,
+    dec_min: decMin,
+    dec_max: decMax,
+    num_objects: count,
+    source: "astro_k3s_mcp.desi_by_path_or_brick"
+  };
+}
+
+function deriveCoordFromDesiBrickname(brickname: string): Coord | null {
+  const matched = brickname.trim().toLowerCase().match(/^(\d{4})([pm])(\d{3})$/);
+  if (!matched) {
+    return null;
+  }
+  const ra = Number(matched[1]) / 10;
+  const decAbs = Number(matched[3]) / 10;
+  const dec = matched[2] === "m" ? -decAbs : decAbs;
+  if (!Number.isFinite(ra) || !Number.isFinite(dec)) {
+    return null;
+  }
+  const halfWindow = 0.125;
+  return {
+    ra_deg: ra,
+    dec_deg: dec,
+    ra_min: ra - halfWindow,
+    ra_max: ra + halfWindow,
+    dec_min: dec - halfWindow,
+    dec_max: dec + halfWindow,
+    source: "desi.brickname_from_path"
+  };
+}
+
+function buildDesiPathPrefixFromInput(uri: string): string {
+  const marker = "/tractor-i/";
+  const idx = uri.indexOf(marker);
+  if (idx === -1) {
+    return uri;
+  }
+  return uri.slice(0, idx);
+}
+
+export function resolveDesiCatalogFromS3Path(uri: string): DesiCatalogName {
+  const normalized = uri.toLowerCase();
+  if (normalized.includes("/dr9/")) {
+    return "desi-dr9-tractor";
+  }
+  return "desi-dr10-tractor";
+}
+
+export async function extractCoordFromDesiS3Input(
+  uri: string,
+  pythonBin: string,
+  options?: { topK?: number; catalog?: DesiCatalogName }
+): Promise<Coord> {
+  if (!uri.startsWith("s3://")) {
+    throw new Error("DESI S3 input must use s3://bucket/key format.");
+  }
+
+  const catalog = options?.catalog ?? resolveDesiCatalogFromS3Path(uri);
+  const topK = Number.isFinite(Number(options?.topK)) ? Number(options?.topK) : 100;
+  const brickname = extractDesiBricknameFromPath(uri);
+  const pathPrefix = buildDesiPathPrefixFromInput(uri);
+
+  if (brickname) {
+    const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog,
+      mode: "search",
+      body: {
+        query: {
+          bool: {
+            filter: [
+              { term: { brickname } },
+              { term: { brick_primary: true } }
+            ]
+          }
+        },
+        from: 0,
+        size: topK
+      }
+    }) as Record<string, unknown>;
+    const rows = mapDesiRowsFromHitRows(getHitRows(payload));
+    const coord = deriveCoordFromDesiRows(rows);
+    if (coord) {
+      return {
+        ...coord,
+        s3_path: uri,
+        brickname,
+        source: "astro_k3s_mcp.desi_brickname"
+      };
+    }
+  }
+
+  const fallbackQuery = {
+    query: {
+      bool: {
+        should: [
+          { wildcard: { source_path: `${pathPrefix}*` } },
+          { wildcard: { path: `${pathPrefix}*` } },
+          { wildcard: { uri: `${pathPrefix}*` } },
+          { wildcard: { s3_path: `${pathPrefix}*` } }
+        ],
+        minimum_should_match: 1
+      }
+    },
+    from: 0,
+    size: topK
+  };
+  const fallbackPayload = await callMcpTool(ASTRO_SERVER, "es_query", {
+    catalog,
+    mode: "search",
+    body: fallbackQuery
+  }) as Record<string, unknown>;
+  const fallbackRows = mapDesiRowsFromHitRows(getHitRows(fallbackPayload));
+  const fallbackCoord = deriveCoordFromDesiRows(fallbackRows);
+  if (fallbackCoord) {
+    return {
+      ...fallbackCoord,
+      s3_path: uri,
+      brickname,
+      source: "astro_k3s_mcp.desi_source_path"
+    };
+  }
+
+  const workerPath = path.resolve("py/workers/extract_radec_catalog.py");
+  const quotedPython = JSON.stringify(pythonBin);
+  const quotedWorker = JSON.stringify(workerPath);
+  const quotedInput = JSON.stringify(uri);
+  const cmd = `${quotedPython} ${quotedWorker} --input ${quotedInput}`;
+  let out = "";
+  try {
+    out = execSync(cmd, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: "1"
+      }
+    }).trim();
+  } catch (error) {
+    if (brickname) {
+      const fromBrickname = deriveCoordFromDesiBrickname(brickname);
+      if (fromBrickname) {
+        return {
+          ...fromBrickname,
+          s3_path: uri,
+          brickname,
+          source: "desi.brickname_from_path:python_fallback_failed"
+        };
+      }
+    }
+    throw new Error(
+      `Unable to derive RA/DEC from DESI s3 input. ES lookup returned no usable rows for catalog=${catalog}, and Python FITS fallback failed (${errorMessage(error)}).`
+    );
+  }
+  const parsed = JSON.parse(out) as Record<string, unknown>;
+  const raDeg = toNumber(parsed.ra_deg);
+  const decDeg = toNumber(parsed.dec_deg);
+  const raMin = toNumber(parsed.ra_min);
+  const raMax = toNumber(parsed.ra_max);
+  const decMin = toNumber(parsed.dec_min);
+  const decMax = toNumber(parsed.dec_max);
+  const numObjects = toNumber(parsed.num_objects);
+  if (
+    raDeg === null
+    || decDeg === null
+    || raMin === null
+    || raMax === null
+    || decMin === null
+    || decMax === null
+  ) {
+    throw new Error("Python DESI catalog fallback did not return numeric RA/DEC range.");
+  }
+  return {
+    ra_deg: raDeg,
+    dec_deg: decDeg,
+    brickname,
+    ra_min: raMin,
+    ra_max: raMax,
+    dec_min: decMin,
+    dec_max: decMax,
+    num_objects: numObjects ?? undefined,
+    s3_path: uri,
+    source: "python_desi_catalog"
+  };
+}
+
 function pickEuclidCatalogEntryByPreference(
   entries: Record<string, unknown>[],
   tileId: string
@@ -268,6 +507,13 @@ function getHitRows(payload: Record<string, unknown>): Record<string, unknown>[]
   const hitsContainer = getHitsContainer(payload);
   const hits = hitsContainer.hits;
   return Array.isArray(hits) ? (hits as Record<string, unknown>[]) : [];
+}
+
+function getHitsTotalFromCountPayload(payload: Record<string, unknown>): number {
+  const data = (payload.data as Record<string, unknown> | undefined) ?? payload;
+  const result = (data.result as Record<string, unknown> | undefined) ?? {};
+  const count = toNumber(result.count);
+  return count ?? 0;
 }
 
 function getHitsTotal(payload: Record<string, unknown>): number {
@@ -492,6 +738,24 @@ function buildEuclidTileLookupQuery(tileId: string): Record<string, unknown> {
   };
 }
 
+async function hasEuclidRowsForTileId(tileId: string): Promise<boolean> {
+  try {
+    const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog: "euclid-q1-mer-final",
+      mode: "search",
+      body: {
+        query: buildEuclidTileLookupQuery(tileId),
+        from: 0,
+        size: 1,
+        _source: ["OBJECT_ID"]
+      }
+    }) as Record<string, unknown>;
+    return getHitRows(payload).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function toBase36Digit(ch: string): number | null {
   const c = ch.charCodeAt(0);
   if (c >= 48 && c <= 57) {
@@ -623,6 +887,16 @@ async function resolveTileIdByCoord(ra: number, dec: number, catalogPath?: strin
     };
   }
 
+  // Prefer index-backed tile resolution first.
+  // The euclid-catalog resolve_tile_id endpoint may return mock IDs in some environments.
+  const indexTile = await resolveTileIdByEuclidIndex(ra, dec);
+  if (indexTile) {
+    return {
+      tile_id: indexTile,
+      source: "astro_k3s_mcp.euclid_tile_index_by_coord"
+    };
+  }
+
   const key = tileCacheKey(ra, dec, catalogPath);
   const cached = tileResolveCache.get(key);
   if (cached) {
@@ -640,11 +914,15 @@ async function resolveTileIdByCoord(ra: number, dec: number, catalogPath?: strin
       ?? toStringOrUndefined(mapping.tile_id)
       ?? toStringOrUndefined(mapping.tileId);
     const tile_id_direct = normalizeTileId(rawTile);
-    const tile_id = tile_id_direct ?? (rawTile ? deriveNumericTileId(rawTile) : undefined);
-    const method = toStringOrUndefined(mapping.method) ?? "resolve_tile_id";
-    const source = tile_id
-      ? `euclid.resolve_tile_id:${method}${tile_id_direct ? "" : ":normalized_non_numeric"}`
+    let tile_id = tile_id_direct;
+    if (tile_id && !(await hasEuclidRowsForTileId(tile_id))) {
+      tile_id = undefined;
+    }
+    let source = tile_id
+      ? `euclid.resolve_tile_id:${toStringOrUndefined(mapping.method) ?? "resolve_tile_id"}`
       : "pending_ra_dec_to_tile_mapping";
+
+    // If resolve_tile_id is missing/invalid, keep unresolved.
     const resolved = { tile_id, source };
     tileResolveCache.set(key, resolved);
     return resolved;
@@ -652,6 +930,49 @@ async function resolveTileIdByCoord(ra: number, dec: number, catalogPath?: strin
     const unresolved = { tile_id: undefined, source: "pending_ra_dec_to_tile_mapping" };
     tileResolveCache.set(key, unresolved);
     return unresolved;
+  }
+}
+
+async function resolveTileIdByEuclidIndex(ra: number, dec: number): Promise<string | undefined> {
+  const windowDeg = Number.isFinite(Number(process.env.EUCLID_TILE_FALLBACK_WINDOW_DEG))
+    ? Number(process.env.EUCLID_TILE_FALLBACK_WINDOW_DEG)
+    : 0.3;
+
+  try {
+    const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog: "euclid-q1-mer-final",
+      mode: "search",
+      body: {
+        query: {
+          bool: {
+            filter: [
+              { range: { RIGHT_ASCENSION: { gte: ra - windowDeg, lte: ra + windowDeg } } },
+              { range: { DECLINATION: { gte: dec - windowDeg, lte: dec + windowDeg } } }
+            ]
+          }
+        },
+        from: 0,
+        size: 256,
+        _source: ["TILE_INDEX", "tile_index", "TILEID", "tileid"]
+      }
+    }) as Record<string, unknown>;
+
+    const hitRows = getHitRows(payload);
+    for (const hit of hitRows) {
+      const source = (hit._source as Record<string, unknown> | undefined) ?? hit;
+      const candidate = normalizeTileId(
+        source.TILE_INDEX
+        ?? source.tile_index
+        ?? source.TILEID
+        ?? source.tileid
+      );
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1078,6 +1399,7 @@ async function queryDesiRowsWithDetails(
   topK: number,
   options?: QueryOptions
 ): Promise<DesiQueryDetails> {
+  const catalog: DesiCatalogName = options?.catalog ?? "desi-dr10-tractor";
   const queryWindowArcsec = Number(process.env.DESI_WINDOW_ARCSEC ?? "10");
   const windowDeg = Number.isFinite(queryWindowArcsec) ? queryWindowArcsec / 3600 : 10 / 3600;
 
@@ -1105,7 +1427,7 @@ async function queryDesiRowsWithDetails(
   };
 
   const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
-    catalog: "desi-dr10-tractor",
+    catalog,
     mode: "search",
     body: queryBody
   }) as Record<string, unknown>;
@@ -1128,7 +1450,7 @@ async function queryDesiRowsWithDetails(
   };
 
   const samplePayload = await callMcpTool(ASTRO_SERVER, "es_query", {
-    catalog: "desi-dr10-tractor",
+    catalog,
     mode: "search",
     body: sampleBody
   }) as Record<string, unknown>;
@@ -1157,7 +1479,7 @@ async function queryDesiRowsWithDetails(
     sampleRows,
     origin: {
       source_system: "astro_k3s_mcp",
-      catalog: "desi-dr10-tractor",
+      catalog,
       backend_type: "mcp_es_index",
       storage_hint: inferStorageHint(sourcePath.value),
       source_path: sourcePath.value,
@@ -1197,13 +1519,15 @@ export async function resolveTileIdForS3Input(catalogPath: string): Promise<{ ti
     throw new Error(`resolve_tile_id_error=${toolError}`);
   }
 
-  const tileId = normalizeTileId(normalized.tile_id);
+  const tileIdRaw = normalizeTileId(normalized.tile_id);
+  const tileId = tileIdRaw && (await hasEuclidRowsForTileId(tileIdRaw)) ? tileIdRaw : undefined;
   const method = toStringOrUndefined((normalized.mapping as Record<string, unknown> | undefined)?.method) ?? "resolve_tile_id";
   return {
     tileId,
     source: tileId ? `euclid.resolve_tile_id:${method}` : "euclid.resolve_tile_id:missing"
   };
 }
+
 
 export async function queryEuclidRowsByTileOnly(tileId: string, topK: number): Promise<CatalogRecord[]> {
   const normalizedTile = normalizeTileId(tileId);
@@ -1218,6 +1542,93 @@ export async function queryDesiMcpWithDetails(
   topK: number,
   options?: QueryOptions
 ): Promise<DesiQueryDetails> {
+  const brickname = coord.brickname?.trim().toLowerCase();
+  if (brickname) {
+    const catalog: DesiCatalogName = options?.catalog ?? "desi-dr10-tractor";
+    const size = Math.min(5000, Math.max(topK, 100));
+    const queryBody = {
+      query: {
+        bool: {
+          filter: [
+            { term: { brickname } },
+            { term: { brick_primary: true } }
+          ]
+        }
+      },
+      from: 0,
+      size
+    };
+    const payload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog,
+      mode: "search",
+      body: queryBody
+    }) as Record<string, unknown>;
+
+    const countPayload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog,
+      mode: "count",
+      body: {
+        query: {
+          bool: {
+            filter: [
+              { term: { brickname } },
+              { term: { brick_primary: true } }
+            ]
+          }
+        }
+      }
+    }) as Record<string, unknown>;
+
+    const samplePayload = await callMcpTool(ASTRO_SERVER, "es_query", {
+      catalog,
+      mode: "search",
+      body: {
+        ...queryBody,
+        size: 3,
+        _source: [
+          "OBJECT_ID",
+          "TARGETID",
+          "ra",
+          "dec",
+          "type",
+          "brickname",
+          "brickid"
+        ]
+      }
+    }) as Record<string, unknown>;
+
+    const hitRows = getHitRows(payload);
+    const rows = mapDesiRowsFromHitRows(hitRows);
+    const sampleRows = mapDesiSampleRows(samplePayload);
+    const sourcePath = detectSourcePath(hitRows.length > 0
+      ? (((hitRows[0]._source as Record<string, unknown> | undefined) ?? hitRows[0]) as Record<string, unknown>)
+      : {});
+
+    return {
+      rows,
+      hitsTotal: getHitsTotalFromCountPayload(countPayload),
+      queryWindow: {
+        ra_min: coord.ra_min ?? Number.NaN,
+        ra_max: coord.ra_max ?? Number.NaN,
+        dec_min: coord.dec_min ?? Number.NaN,
+        dec_max: coord.dec_max ?? Number.NaN
+      },
+      queryBody,
+      rawPayload: payload,
+      samplePayload,
+      sampleRows,
+      origin: {
+        source_system: "astro_k3s_mcp",
+        catalog,
+        backend_type: "mcp_es_index",
+        storage_hint: inferStorageHint(sourcePath.value),
+        source_path: sourcePath.value,
+        source_path_field: sourcePath.field,
+        note: `DESI query by brickname=${brickname}`
+      }
+    };
+  }
+
   return queryDesiRowsWithDetails(coord, topK, options);
 }
 

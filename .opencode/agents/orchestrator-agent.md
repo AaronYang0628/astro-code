@@ -10,6 +10,8 @@
 
 - Default behavior in web mode is strict step-by-step execution.
 - Do not run one-shot pipeline commands (`npx tsx src/orchestrator/index.ts`, `npm run run -- ...`) unless user explicitly says one-shot is allowed.
+- Hard rule: when conversation channel is web chat, never start with shell one-shot execution.
+- Hard rule: print `STEP / GOAL / ACTION` first, then run tools/MCP, then print `RESULT`.
 - Follow playbook steps sequentially and report each step with `STEP / GOAL / ACTION / RESULT`.
 - `STEP / GOAL / ACTION / RESULT` is mandatory for every executed step (no exceptions).
 - Never call MCP/tools silently. Before each step's tool call, print `STEP + GOAL + ACTION`; after completion print `RESULT`.
@@ -22,7 +24,68 @@
 - Pause only on hard gates:
   - selection gate waiting for popup confirmation (`waiting_selection`)
   - zero-result gate requiring region adjust decision
+- Hard rule: after entering `waiting_selection`, do not switch to CLI mode and do not use `*.cli*.json` requests to bypass gate.
 - Prefer smaller verifiable actions in development.
+
+## Bounded preflight exploration (default: disabled)
+
+- For `euclid_cutout_mvp` and `desi_cutout_mvp`, exploration is disabled during normal execution.
+- Do not search `package.json`, playbooks, docs, examples, or scripts just to "find" execution entry.
+- If an MCP call fails with schema/contract error, do not run preflight search/read steps.
+- Instead, stay in the current step and retry once with corrected request shape, then continue fixed sequence.
+- Never create a new step index for contract retries.
+- Only read files under current `runs/<run_id>/` when resuming an existing run.
+
+## Deterministic step output (mandatory)
+
+- Emit exactly one `STEP / GOAL / ACTION / RESULT` block per stage.
+- Do not repeat `STEP 1` multiple times for exploratory checks.
+- Step order must be monotonic and fixed to the workflow sequence.
+- Retries must be reported inside the same step `RESULT`; do not emit an extra step block for retries.
+
+## Fixed workflow (single-star-table)
+
+- Use this fixed sequence with minimal branching:
+  1) input-router
+  2) coord-extractor
+  3) euclid-query
+  4) desi-query
+  5) crossmatch
+  6) preview-export
+  7) selection-plan
+  8) filtered-export
+  9) cutout-execute
+- Workflow-specific behavior:
+  - `euclid_cutout_mvp`: step `desi-query` is skipped; step `crossmatch` builds Euclid-only candidate pool.
+  - `desi_cutout_mvp`: step `euclid-query` is skipped; step `desi-query` must execute against DESI catalog; step `crossmatch` builds DESI-only candidate pool.
+- Do not perform extra exploratory MCP calls outside this fixed sequence.
+
+## Pause policy (hard)
+
+- Do not pause for permission/confirmation between normal steps.
+- Pause only at:
+  - `waiting_selection` (popup confirm + params required)
+  - `zero-result` gate
+  - unrecoverable service outage after bounded retries
+- If paused at `waiting_selection`, resume only with confirmation evidence in the same run (`resume_run_id`/`resume_run_dir`), not by launching a fresh CLI run.
+
+## MCP call whitelist (single-star-table)
+
+- `input-router`:
+  - `euclid_cutout_mvp` + `s3_uri`: `euclid-catalog.resolve_tile_id`, `astro_k3s_mcp.es_query` (catalog=`euclid-q1-mer-final`, filter by `tile_id`)
+  - otherwise: no extra whitelist calls beyond workflow steps
+- `coord-extractor`:
+  - `radec_text`: no MCP
+  - `s3_uri` + `euclid_cutout_mvp`: only `euclid-catalog.parse_fits_header_only`, `euclid-catalog.get_catalog_objects`, and fallback tile lookup via `astro_k3s_mcp.es_query`
+  - `s3_uri` + `desi_cutout_mvp`: use `astro_k3s_mcp.es_query` on DESI catalog with `term(brickname)` first; if no usable ES rows, fallback to brickname-derived RA/DEC; Python FITS parser is optional last fallback and must not block flow
+- `euclid-query`:
+  - `euclid_cutout_mvp`: query Euclid rows (or reuse input-router rows for Euclid `s3_uri`)
+  - `desi_cutout_mvp`: skip
+- `desi-query`:
+  - `euclid_cutout_mvp`: skip
+  - `desi_cutout_mvp`: must call `astro_k3s_mcp.es_query` on resolved DESI catalog (dr10/dr9 by input path)
+- `crossmatch`: transform stage only (no direct MCP requirement)
+- `cutout-execute`: only `fits-cutout.execute_cutout_group`
 
 ## Output protocol (hard requirement)
 
@@ -34,10 +97,32 @@
   5) `RESULT: ...` (include key numbers + artifact paths)
 - If multiple steps run continuously, repeat the full block for each step.
 - Do not skip narration just because calls succeed quickly.
+- At `preview-export`, always print:
+  - preview CSV artifact path
+  - top-10 preview table (or explicit unavailable reason)
+
+## ES query contract (hard requirement)
+
+- For `astro_k3s_mcp.es_query` with `mode=search`, always use:
+  - `catalog`
+  - `mode`
+  - `body` (Elasticsearch query body)
+- Put pagination inside `body` only (`body.from`, `body.size`).
+- Never place `size` or `query` as top-level fields outside `body`.
+- Never use `queries[]` for these single-step calls.
+
+## DESI S3 routing rules (hard requirement)
+
+- For `desi_cutout_mvp` + `s3_uri`, parse `brickname` from file path (e.g. `tractor-i-0146m052.fits` -> `0146m052`).
+- Resolve DESI catalog by path token:
+  - `/dr10/` -> `desi-dr10-tractor`
+  - `/dr9/` -> `desi-dr9-tractor`
+- In `coord-extractor`, query by `term(brickname)` first; do not query by path fields unless schema confirms those fields exist.
+- In `desi-query`, primary query must include `term(brickname)` when brickname is available; optional RA/DEC window can be added.
 
 ## Web gate defaults (must follow)
 
-- For `euclid_cutout_mvp` in web mode, selection is a mandatory human gate.
+- For `euclid_cutout_mvp` and `desi_cutout_mvp` in web mode, selection is a mandatory human gate.
 - Without popup confirmation receipt, status must remain `waiting_selection`.
 - Do not treat inline/ad-hoc conditions as confirmed selection.
 - Require confirmation evidence (`selection_confirmed=true` and valid `selection_plan_response.json`) before applying selection.
