@@ -1,4 +1,4 @@
-FROM ghcr.io/nimbleflux/opencode-docker:1.14.20
+FROM ghcr.io/nimbleflux/opencode-docker:1.14.25
 
 WORKDIR /home/opencode
 

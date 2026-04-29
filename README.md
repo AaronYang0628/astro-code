@@ -91,6 +91,7 @@ Detailed guides:
 - When crossmatch has rows, field/value filtering is collected via configured backend (`native|octto|hybrid`).
 - Euclid tile lookup can run from local registry file `config/euclid_tiles_q1.json` (override with `EUCLID_TILE_REGISTRY_PATH`).
 - Local cutout worker (no MCP server required): `py/workers/cutout_stamp_worker.py`.
+- Optional telemetry (Langfuse/OTLP): set `OTEL_ENABLED=1` and `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to auto-export run/step/MCP traces.
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
 - Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
@@ -177,7 +178,7 @@ Quick commands (run in project root):
 ```bash
 opencode debug config
 opencode mcp list
-NODE_TLS_REJECT_UNAUTHORIZED=0 opencode web --port 7788
+OTEL_ENABLED=1  OTEL_SERVICE_NAME=astro-code-orchestrator  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 NODE_TLS_REJECT_UNAUTHORIZED=0 opencode web --port 7788
 ```
 
 - `opencode web .` is invalid for this CLI version; `web` does not accept project positional args.

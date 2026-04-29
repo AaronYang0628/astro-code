@@ -15,6 +15,14 @@ import { executeGroupedCutoutViaMcp } from "./cutout.js";
 import { resolveCutoutEnabled, shouldExecuteCutout } from "./cutout-gate.js";
 import type { CatalogRecord, Coord, CrossmatchRecord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
 import { resolveLocalEuclidTileId } from "./euclid-tiles.js";
+import {
+  addActiveSpanEvent,
+  endSpanError,
+  endSpanOk,
+  setActiveSpanAttributes,
+  startSpan,
+  type SpanLike
+} from "./telemetry.js";
 
 function toBrickPrefix(brickname: string): string {
   return brickname.slice(0, 3);
@@ -610,17 +618,40 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     playbookStepIndex.set(stepDef.id, idx + 1);
   });
   const totalSteps = playbook.steps.length;
+  let activeStepSpan: SpanLike | null = null;
 
   const step = (stepId: string, goal: string, action: string): void => {
+    if (activeStepSpan) {
+      endSpanOk(activeStepSpan);
+      activeStepSpan = null;
+    }
     const idx = playbookStepIndex.get(stepId) ?? 0;
     const pos = idx > 0 ? `${idx}/${totalSteps}` : `?/${totalSteps}`;
     progress?.(`STEP: ${pos} (${stepId})`);
     progress?.(`GOAL: ${goal}`);
     progress?.(`ACTION: ${action}`);
+    addActiveSpanEvent("astro.step.start", {
+      "astro.step.id": stepId,
+      "astro.step.goal": goal,
+      "astro.step.action": action,
+      "astro.step.position": pos
+    });
+    activeStepSpan = startSpan(`astro.step.${stepId}`, {
+      "astro.step.id": stepId,
+      "astro.step.goal": goal,
+      "astro.step.action": action,
+      "astro.step.position": pos
+    });
   };
 
   const stepResult = (message: string): void => {
     progress?.(`RESULT: ${message}`);
+    addActiveSpanEvent("astro.step.result", {
+      "astro.step.result": message
+    });
+    activeStepSpan?.addEvent("astro.step.result", {
+      "astro.step.result": message
+    });
   };
 
   progress?.(`Run started: ${runId}`);
@@ -650,6 +681,17 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   const previewRows = request.previewRows ?? playbook.defaults?.preview_rows ?? config.defaults.preview_rows;
   const effectivePreviewRows = Math.max(10, previewRows);
   const maxResultRows = config.defaults.max_result_rows;
+
+  setActiveSpanAttributes({
+    "astro.run.id": runId,
+    "astro.run.dir": runDir,
+    "astro.interaction": interaction,
+    "astro.workflow": workflow || "default"
+  });
+  addActiveSpanEvent("astro.run.started", {
+    "astro.run.id": runId,
+    "astro.run.dir": runDir
+  });
 
   const runStatus: RunStatus = {
     run_id: runId,
@@ -812,6 +854,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
         mcp_call_log_txt: mcpCallLogFile
       };
       writeRunStatus(statusJson, runStatus);
+      addActiveSpanEvent("astro.run.waiting_selection", {
+        "astro.run.id": runId,
+        "astro.selection.required": true,
+        "astro.selection.candidate_rows": crossmatchTruncated.length
+      });
 
       return {
         runId,
@@ -968,6 +1015,13 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       mcp_call_log_txt: mcpCallLogFile
     };
     writeRunStatus(statusJson, runStatus);
+    addActiveSpanEvent("astro.run.completed", {
+      "astro.run.id": runId,
+      "astro.selection.rows": selectionResult.selected_rows.length,
+      "astro.cutout.groups_total": cutoutGroupsTotal,
+      "astro.cutout.success_rows": cutoutSuccessRows,
+      "astro.cutout.failed_rows": cutoutFailedRows
+    });
 
     return {
       runId,
@@ -1069,6 +1123,9 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     euclidRows = await queryCatalogMcp("euclid", coord, topK);
   }
   stepResult(`euclid rows loaded: ${euclidRows.length}`);
+  setActiveSpanAttributes({
+    "astro.euclid.rows": euclidRows.length
+  });
   runStatus.metrics = { ...(runStatus.metrics ?? {}), euclid_rows: euclidRows.length };
   writeRunStatus(statusJson, runStatus);
 
@@ -1165,6 +1222,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     writeJson(desiOriginJson, desiDetails.origin);
 
     progress?.(`DESI hits (initial): rows=${desiRowsInitial}, hits_total=${desiHitsTotalInitial}`);
+    setActiveSpanAttributes({
+      "astro.desi.rows_initial": desiRowsInitial,
+      "astro.desi.hits_total_initial": desiHitsTotalInitial
+    });
     progress?.(`DESI raw response (initial): ${desiSearchInitialRawJson}`);
     progress?.(`DESI sample response (size=3): ${desiSearchSampleRawJson}`);
     progress?.(`DESI source metadata: ${desiOriginJson}`);
@@ -1392,6 +1453,10 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   }
 
   stepResult(`candidate pool rows: ${crossmatchTruncated.length}; preview rows: ${preview.length}`);
+  setActiveSpanAttributes({
+    "astro.candidate_pool.rows": crossmatchTruncated.length,
+    "astro.preview.rows": preview.length
+  });
   runStatus.metrics = {
     ...(runStatus.metrics ?? {}),
     candidate_pool_rows: crossmatchTruncated.length,
@@ -1609,6 +1674,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   }
 
   const selectionResult = applySelectionPlan(crossmatchTruncated, selectionGate.plan);
+  setActiveSpanAttributes({
+    "astro.selection.mode": selectionGate.mode,
+    "astro.selection.rows": selectionResult.selected_rows.length,
+    "astro.selection.candidate_rows_after_quality": selectionResult.candidate_rows_after_quality.length
+  });
   writeCsv(selectionFinalCsv, selectionResult.selected_rows as unknown as Record<string, unknown>[], [...outputColumns]);
   writeJson(selectionReportJson, {
     run_id: runId,
@@ -1680,6 +1750,11 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       raw_reports_json: cutoutRawReportsJson
     });
     stepResult(`cutout complete: groups=${cutoutGroupsTotal}, success_rows=${cutoutSuccessRows}, failed_rows=${cutoutFailedRows}`);
+    setActiveSpanAttributes({
+      "astro.cutout.groups_total": cutoutGroupsTotal,
+      "astro.cutout.success_rows": cutoutSuccessRows,
+      "astro.cutout.failed_rows": cutoutFailedRows
+    });
   }
 
   progress?.(`Selection mode: ${selectionGate.mode}`);
@@ -1941,6 +2016,13 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       mcp_call_log_txt: mcpCallLogFile
     };
     writeRunStatus(statusJson, runStatus);
+    addActiveSpanEvent("astro.run.completed", {
+      "astro.run.id": runId,
+      "astro.final.rows": filtered.length,
+      "astro.cutout.groups_total": cutoutGroupsTotal,
+      "astro.cutout.success_rows": cutoutSuccessRows,
+      "astro.cutout.failed_rows": cutoutFailedRows
+    });
 
   progress?.(`Artifacts: candidate_pool=${candidatePoolCsv}`);
   progress?.(`Artifacts: status=${statusJson}`);
@@ -1978,8 +2060,18 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     progress?.(`Artifacts: region_adjust_request=${artifacts.regionAdjustRequestJson}`);
   }
 
+    if (activeStepSpan) {
+      endSpanOk(activeStepSpan);
+      activeStepSpan = null;
+    }
     return { runId, runDir, artifacts, summary };
   } catch (error) {
+    if (activeStepSpan) {
+      endSpanError(activeStepSpan, error, {
+        "astro.error.step": runStatus.current_step ?? "unknown"
+      });
+      activeStepSpan = null;
+    }
     runStatus.state = "failed";
     runStatus.current_phase = "failed";
     runStatus.error = {
@@ -1987,8 +2079,17 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
       step: runStatus.current_step
     };
     writeRunStatus(statusJson, runStatus);
+    addActiveSpanEvent("astro.run.failed", {
+      "astro.run.id": runId,
+      "astro.error.step": runStatus.current_step,
+      "astro.error.message": error instanceof Error ? error.message : String(error)
+    });
     throw error;
   } finally {
+    if (activeStepSpan) {
+      endSpanOk(activeStepSpan);
+      activeStepSpan = null;
+    }
     setMcpCallLogger(undefined);
   }
 }

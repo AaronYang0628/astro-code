@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { runMvpPipeline } from "./runner.js";
 import { loadConfig } from "./config.js";
 import type { RunArtifacts, RunSummary } from "./types.js";
+import { initTelemetry, isTelemetryEnabled, shutdownTelemetry, withSpan } from "./telemetry.js";
 
 function toMarkdownTable(rows: Record<string, unknown>[], headers: string[]): string {
   if (rows.length === 0 || headers.length === 0) {
@@ -53,6 +54,11 @@ function mapWorkflowToPlaybook(workflow: string): string | undefined {
 }
 
 async function main(): Promise<void> {
+  const telemetryReady = await initTelemetry();
+  if (telemetryReady) {
+    process.stdout.write("Telemetry: enabled (OTLP export active)\n");
+  }
+
   const configPath = argValue("--pipeline-config") ?? argValue("--config") ?? "pipeline.config.yaml";
   const config = loadConfig(path.resolve(configPath));
   const requestPath = argValue("--request") ?? "examples/request.radec.json";
@@ -77,7 +83,7 @@ async function main(): Promise<void> {
     process.stdout.write(`Workflow not mapped, fallback to default playbook: ${requestWorkflow}\n`);
   }
 
-  const result = await runMvpPipeline({
+  const runner = async () => runMvpPipeline({
     configPath: path.resolve(configPath),
     playbookPath: path.resolve(playbookPath),
     requestPath: path.resolve(requestPath),
@@ -85,6 +91,14 @@ async function main(): Promise<void> {
       process.stdout.write(`[progress] ${line}\n`);
     }
   });
+  const result = isTelemetryEnabled()
+    ? await withSpan("astro.run", async () => runner(), {
+      "astro.request.path": path.resolve(requestPath),
+      "astro.playbook.path": path.resolve(playbookPath),
+      "astro.pipeline.config": path.resolve(configPath),
+      "astro.workflow.requested": requestWorkflow ?? ""
+    })
+    : await runner();
 
   process.stdout.write(`Run complete: ${result.runId}\n`);
   if (requestWorkflow && result.summary.selectionRequired) {
@@ -173,4 +187,6 @@ async function main(): Promise<void> {
 main().catch((error) => {
   process.stderr.write(`${String(error)}\n`);
   process.exit(1);
+}).finally(async () => {
+  await shutdownTelemetry();
 });

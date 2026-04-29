@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { setActiveSpanAttributes, withSpan } from "./telemetry.js";
 
 interface McpServerConfig {
   type?: string;
@@ -67,6 +68,12 @@ function parseContentJson(result: unknown): unknown {
   }
 }
 
+function estimatePayloadShape(input: Record<string, unknown>): { keys: number; targets: number } {
+  const keys = Object.keys(input).length;
+  const targets = Array.isArray(input.targets) ? input.targets.length : 0;
+  return { keys, targets };
+}
+
 async function withMcpClient<T>(serverName: string, fn: (client: Client) => Promise<T>): Promise<T> {
   const mcp = loadMcpConfig();
   const server = mcp[serverName];
@@ -112,13 +119,29 @@ export async function callMcpTool(
   toolName: string,
   input: Record<string, unknown>
 ): Promise<unknown> {
-  const startedAt = Date.now();
-  mcpCallLogger?.(`[mcp] start server=${serverName} tool=${toolName}`);
-  return withMcpClient(serverName, async (client) => {
-    const raw = await client.callTool({ name: toolName, arguments: input });
-    const parsed = parseContentJson(raw);
+  const payloadShape = estimatePayloadShape(input);
+  return withSpan("astro.mcp.call", async (span) => {
+    const startedAt = Date.now();
+    mcpCallLogger?.(`[mcp] start server=${serverName} tool=${toolName}`);
+    const parsed = await withMcpClient(serverName, async (client) => {
+      const raw = await client.callTool({ name: toolName, arguments: input });
+      return parseContentJson(raw);
+    });
     const cost = Date.now() - startedAt;
+    setActiveSpanAttributes({
+      "astro.mcp.server": serverName,
+      "astro.mcp.tool": toolName,
+      "astro.mcp.duration_ms": cost,
+      "astro.mcp.payload_keys": payloadShape.keys,
+      "astro.mcp.targets_count": payloadShape.targets
+    });
+    span.addEvent("mcp.call.done");
     mcpCallLogger?.(`[mcp] done server=${serverName} tool=${toolName} duration_ms=${cost}`);
     return parsed;
+  }, {
+    "astro.mcp.server": serverName,
+    "astro.mcp.tool": toolName,
+    "astro.mcp.payload_keys": payloadShape.keys,
+    "astro.mcp.targets_count": payloadShape.targets
   });
 }

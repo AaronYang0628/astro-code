@@ -6,6 +6,7 @@ __pycache__/
 runs/
 .DS_Store
 .vscode/
+.ruff_cache/
 
 # Local secrets
 .env

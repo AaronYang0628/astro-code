@@ -1,5 +1,6 @@
 import { callMcpTool } from "./mcp-client.js";
 import type { CrossmatchRecord } from "./types.js";
+import { addActiveSpanEvent } from "./telemetry.js";
 
 type DesiBand = "g" | "r" | "i" | "z";
 
@@ -248,11 +249,23 @@ export async function executeGroupedCutoutViaMcp(
 
   for (const group of groups) {
     options.progress?.(`Cutout group: telescope=${group.telescope}, band=${group.band}, targets=${group.targets.length}, batch_size=${effectiveBatchSize}`);
+    addActiveSpanEvent("astro.cutout.group.start", {
+      "astro.cutout.telescope": group.telescope,
+      "astro.cutout.band": group.band,
+      "astro.cutout.source_uri": group.source_uri,
+      "astro.cutout.targets": group.targets.length,
+      "astro.cutout.batch_size": effectiveBatchSize
+    });
     let groupHasError = false;
     const batches = chunkTargets(group.targets, effectiveBatchSize);
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
       const batchTargets = batches[batchIndex];
       options.progress?.(`Cutout batch: ${batchIndex + 1}/${batches.length}, targets=${batchTargets.length}`);
+      addActiveSpanEvent("astro.cutout.batch.start", {
+        "astro.cutout.batch_index": batchIndex + 1,
+        "astro.cutout.batch_total": batches.length,
+        "astro.cutout.batch_targets": batchTargets.length
+      });
       try {
         const raw = await callMcpTool(options.serverName, "execute_cutout_group", {
           run_id: options.runId,
@@ -278,6 +291,9 @@ export async function executeGroupedCutoutViaMcp(
 
         if (resultRows.length === 0 && typeof report.error === "string") {
           groupHasError = true;
+          addActiveSpanEvent("astro.cutout.batch.error", {
+            "astro.cutout.error": String(report.error)
+          });
           for (const target of batchTargets) {
             records.push({
               status: "error",
@@ -297,6 +313,9 @@ export async function executeGroupedCutoutViaMcp(
 
         if (typeof report.error === "string") {
           groupHasError = true;
+          addActiveSpanEvent("astro.cutout.batch.partial_error", {
+            "astro.cutout.error": String(report.error)
+          });
         }
 
         for (const result of resultRows) {
@@ -305,6 +324,9 @@ export async function executeGroupedCutoutViaMcp(
       } catch (error) {
         groupHasError = true;
         const message = error instanceof Error ? error.message : String(error);
+        addActiveSpanEvent("astro.cutout.batch.exception", {
+          "astro.cutout.error": message
+        });
         for (const target of batchTargets) {
           records.push({
             status: "error",
@@ -323,8 +345,18 @@ export async function executeGroupedCutoutViaMcp(
 
     if (groupHasError) {
       groupsFailed += 1;
+      addActiveSpanEvent("astro.cutout.group.failed", {
+        "astro.cutout.telescope": group.telescope,
+        "astro.cutout.band": group.band,
+        "astro.cutout.targets": group.targets.length
+      });
     } else {
       groupsSucceeded += 1;
+      addActiveSpanEvent("astro.cutout.group.succeeded", {
+        "astro.cutout.telescope": group.telescope,
+        "astro.cutout.band": group.band,
+        "astro.cutout.targets": group.targets.length
+      });
     }
   }
 
