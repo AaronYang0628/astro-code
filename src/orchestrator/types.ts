@@ -63,6 +63,15 @@ export interface RunRequest {
   selection?: SelectionPlan;
   selection_confirmed?: boolean;
   cutout?: CutoutRequest;
+  llm_usage?: {
+    model?: string;
+    provider?: string;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    latency_ms?: number;
+    estimated_cost_usd?: number;
+  };
 }
 
 export interface RunArtifacts {

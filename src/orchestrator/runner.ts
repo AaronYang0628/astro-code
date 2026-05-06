@@ -15,6 +15,7 @@ import { executeGroupedCutoutViaMcp } from "./cutout.js";
 import { resolveCutoutEnabled, shouldExecuteCutout } from "./cutout-gate.js";
 import type { CatalogRecord, Coord, CrossmatchRecord, Playbook, RunArtifacts, RunRequest, RunSummary } from "./types.js";
 import { resolveLocalEuclidTileId } from "./euclid-tiles.js";
+import { estimateLlmCostUsd, recordLlmUsage } from "./llm-observability.js";
 import {
   addActiveSpanEvent,
   endSpanError,
@@ -686,12 +687,37 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
     "astro.run.id": runId,
     "astro.run.dir": runDir,
     "astro.interaction": interaction,
-    "astro.workflow": workflow || "default"
+    "astro.workflow": workflow || "default",
+    "astro.request.input_type": request.input.type,
+    "astro.request.top_k": topK,
+    "astro.request.radius_arcsec": radiusArcsec,
+    "astro.request.preview_rows": effectivePreviewRows,
+    "astro.request.cutout_enabled": resolveCutoutEnabled(request.cutout?.enabled, isEuclidSingleWorkflow || isDesiSingleWorkflow),
+    "astro.request.selection_confirmed": request.selection_confirmed === true,
+    "astro.request.resume": Boolean(request.resume_run_id || request.resume_run_dir)
   });
   addActiveSpanEvent("astro.run.started", {
     "astro.run.id": runId,
     "astro.run.dir": runDir
   });
+
+  if (request.llm_usage) {
+    const promptTokens = Number(request.llm_usage.prompt_tokens ?? 0);
+    const completionTokens = Number(request.llm_usage.completion_tokens ?? 0);
+    const totalTokensRaw = Number(request.llm_usage.total_tokens ?? (promptTokens + completionTokens));
+    const totalTokens = Number.isFinite(totalTokensRaw) ? totalTokensRaw : (promptTokens + completionTokens);
+    const estimatedCost = request.llm_usage.estimated_cost_usd
+      ?? estimateLlmCostUsd(request.llm_usage.model ?? "openai/gpt-5.3-codex", promptTokens, completionTokens);
+    recordLlmUsage({
+      model: request.llm_usage.model ?? "openai/gpt-5.3-codex",
+      provider: request.llm_usage.provider,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      latencyMs: Number(request.llm_usage.latency_ms ?? 0),
+      estimatedCostUsd: estimatedCost
+    });
+  }
 
   const runStatus: RunStatus = {
     run_id: runId,

@@ -64,6 +64,29 @@ function resolveExporterUrl(): string | undefined {
   return endpoint.endsWith("/v1/traces") ? endpoint : `${endpoint.replace(/\/$/, "")}/v1/traces`;
 }
 
+function parseOtlpHeaders(raw: string | undefined): Record<string, string> | undefined {
+  if (!raw || raw.trim().length === 0) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const piece of raw.split(",")) {
+    const item = piece.trim();
+    if (!item) {
+      continue;
+    }
+    const idx = item.indexOf("=");
+    if (idx <= 0 || idx >= item.length - 1) {
+      continue;
+    }
+    const key = item.slice(0, idx).trim();
+    const value = item.slice(idx + 1).trim();
+    if (key) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 async function loadRuntime(): Promise<{
   runtime: OtelRuntime;
   provider: { register(): void; shutdown(): Promise<void> };
@@ -91,7 +114,19 @@ async function loadRuntime(): Promise<{
       SpanStatusCode: api.SpanStatusCode as OtelRuntime["SpanStatusCode"]
     },
     provider: new sdkNode.NodeTracerProvider(),
-    makeExporter: (url?: string) => new exporter.OTLPTraceExporter(url ? { url } : {}),
+    makeExporter: (url?: string) => {
+      const headers = parseOtlpHeaders(
+        process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS ?? process.env.OTEL_EXPORTER_OTLP_HEADERS
+      );
+      const opts: { url?: string; headers?: Record<string, string> } = {};
+      if (url) {
+        opts.url = url;
+      }
+      if (headers) {
+        opts.headers = headers;
+      }
+      return new exporter.OTLPTraceExporter(opts);
+    },
     makeBatchProcessor: (exp: unknown) => new sdkBase.BatchSpanProcessor(exp),
     makeResource: (attrs: Attributes) => resources.resourceFromAttributes(attrs),
     semconv: {

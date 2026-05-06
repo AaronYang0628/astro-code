@@ -74,6 +74,45 @@ function estimatePayloadShape(input: Record<string, unknown>): { keys: number; t
   return { keys, targets };
 }
 
+function summarizeInputForTelemetry(input: Record<string, unknown>): Record<string, string | number | boolean> {
+  const summary: Record<string, string | number | boolean> = {
+    "astro.mcp.arg_keys": Object.keys(input).join(",")
+  };
+
+  const runId = input.run_id;
+  if (typeof runId === "string" && runId.trim().length > 0) {
+    summary["astro.run.id"] = runId.trim();
+  }
+
+  const mode = input.mode;
+  if (typeof mode === "string" && mode.trim().length > 0) {
+    summary["astro.mcp.mode"] = mode.trim();
+  }
+
+  const catalog = input.catalog;
+  if (typeof catalog === "string" && catalog.trim().length > 0) {
+    summary["astro.mcp.catalog"] = catalog.trim();
+  }
+
+  const sourceUri = input.source_uri;
+  if (typeof sourceUri === "string" && sourceUri.trim().length > 0) {
+    const redacted = sourceUri.length > 140 ? `${sourceUri.slice(0, 140)}...` : sourceUri;
+    summary["astro.mcp.source_uri"] = redacted;
+  }
+
+  const band = input.band;
+  if (typeof band === "string" && band.trim().length > 0) {
+    summary["astro.mcp.band"] = band.trim();
+  }
+
+  const telescope = input.telescope;
+  if (typeof telescope === "string" && telescope.trim().length > 0) {
+    summary["astro.mcp.telescope"] = telescope.trim();
+  }
+
+  return summary;
+}
+
 async function withMcpClient<T>(serverName: string, fn: (client: Client) => Promise<T>): Promise<T> {
   const mcp = loadMcpConfig();
   const server = mcp[serverName];
@@ -120,6 +159,7 @@ export async function callMcpTool(
   input: Record<string, unknown>
 ): Promise<unknown> {
   const payloadShape = estimatePayloadShape(input);
+  const inputSummary = summarizeInputForTelemetry(input);
   return withSpan("astro.mcp.call", async (span) => {
     const startedAt = Date.now();
     mcpCallLogger?.(`[mcp] start server=${serverName} tool=${toolName}`);
@@ -133,7 +173,8 @@ export async function callMcpTool(
       "astro.mcp.tool": toolName,
       "astro.mcp.duration_ms": cost,
       "astro.mcp.payload_keys": payloadShape.keys,
-      "astro.mcp.targets_count": payloadShape.targets
+      "astro.mcp.targets_count": payloadShape.targets,
+      ...inputSummary
     });
     span.addEvent("mcp.call.done");
     mcpCallLogger?.(`[mcp] done server=${serverName} tool=${toolName} duration_ms=${cost}`);
@@ -142,6 +183,7 @@ export async function callMcpTool(
     "astro.mcp.server": serverName,
     "astro.mcp.tool": toolName,
     "astro.mcp.payload_keys": payloadShape.keys,
-    "astro.mcp.targets_count": payloadShape.targets
+    "astro.mcp.targets_count": payloadShape.targets,
+    ...inputSummary
   });
 }

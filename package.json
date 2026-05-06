@@ -19,7 +19,8 @@
     "@opentelemetry/sdk-trace-base": "^2.1.0",
     "@opentelemetry/sdk-trace-node": "^2.1.0",
     "@opentelemetry/semantic-conventions": "^1.36.0",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "opencode-plugin-langfuse": "^0.1.8"
   },
   "devDependencies": {
     "@types/node": "^22.13.14",

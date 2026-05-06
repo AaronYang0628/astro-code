@@ -92,6 +92,27 @@ Detailed guides:
 - Euclid tile lookup can run from local registry file `config/euclid_tiles_q1.json` (override with `EUCLID_TILE_REGISTRY_PATH`).
 - Local cutout worker (no MCP server required): `py/workers/cutout_stamp_worker.py`.
 - Optional telemetry (Langfuse/OTLP): set `OTEL_ENABLED=1` and `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to auto-export run/step/MCP traces.
+- For OTLP auth headers, set `OTEL_EXPORTER_OTLP_HEADERS` (or `OTEL_EXPORTER_OTLP_TRACES_HEADERS`) with `key=value,key2=value2`.
+
+### Optional LLM usage metadata
+
+If your web layer knows LLM token usage, pass it in request JSON under `llm_usage` so traces include token/cost signals:
+
+```json
+{
+  "llm_usage": {
+    "model": "openai/gpt-5.3-codex",
+    "provider": "openai-compatible",
+    "prompt_tokens": 3200,
+    "completion_tokens": 580,
+    "total_tokens": 3780,
+    "latency_ms": 1840,
+    "estimated_cost_usd": 0.0245
+  }
+}
+```
+
+If `estimated_cost_usd` is omitted, orchestrator tries a local estimate for known models.
 - Verified matching RA/DEC for quick flow validation: `examples/request.radec.match.json`.
 - Preview-rich RA/DEC profile for filter UX development: `examples/request.radec.match.radius250.json`.
 - Multi-condition filter replay sample: `examples/request.radec.match.radius250.filter.json`.
