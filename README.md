@@ -91,6 +91,7 @@ Detailed guides:
 - When crossmatch has rows, field/value filtering is collected via configured backend (`native|octto|hybrid`).
 - Euclid tile lookup can run from local registry file `config/euclid_tiles_q1.json` (override with `EUCLID_TILE_REGISTRY_PATH`).
 - Local cutout worker (no MCP server required): `py/workers/cutout_stamp_worker.py`.
+- fits-cutout service scaffold (tool contract implementation): `py/mcp/fits_cutout/service.py`.
 - Optional telemetry (Langfuse/OTLP): set `OTEL_ENABLED=1` and `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to auto-export run/step/MCP traces.
 - For OTLP auth headers, set `OTEL_EXPORTER_OTLP_HEADERS` (or `OTEL_EXPORTER_OTLP_TRACES_HEADERS`) with `key=value,key2=value2`.
 

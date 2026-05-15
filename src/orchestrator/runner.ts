@@ -1450,8 +1450,8 @@ export async function runMvpPipeline(options: RunnerOptions): Promise<{ runId: s
   ]);
 
   let crossmatchTruncated = normalizeCandidatePaths(crossmatched.slice(0, maxResultRows));
-  if (isEuclidSingleWorkflow && effectiveRequest.input.type === "s3_uri") {
-    crossmatchTruncated = pinEuclidFitsPathToInput(crossmatchTruncated, effectiveRequest.input.value);
+  if (isEuclidSingleWorkflow) {
+    crossmatchTruncated = await hydrateEuclidFitsPaths(crossmatchTruncated);
   } else if (isDesiSingleWorkflow) {
     crossmatchTruncated = await hydrateEuclidFitsPathsFromCoord(crossmatchTruncated, coord);
   } else if (!isDesiSingleWorkflow) {

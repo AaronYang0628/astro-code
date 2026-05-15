@@ -64,7 +64,7 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
   hosts:
-    - host: astro.code.ay.dev
+    - host: astro.agent.72602.online
       paths:
         - path: /
           pathType: Prefix
